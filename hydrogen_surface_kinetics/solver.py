@@ -264,7 +264,8 @@ def condition_jobs(conditions, prefix=''):
     return jobs
 
 
-def run_conditions(model, conditions, cache_subdir='cache', prefix='', both_starts=True, **run_overrides):
+def run_conditions(model, conditions, cache_subdir='cache', prefix='', both_starts=True, log=print,
+                   **run_overrides):
     """Solve every row of a conditions table from both starts, in parallel, with caching.
     run_overrides (workers, job_timeout, recompute) override cfg.run. Returns {key: result};
     each result has 'row' as well as 'job'."""
@@ -283,7 +284,7 @@ def run_conditions(model, conditions, cache_subdir='cache', prefix='', both_star
                        cache_dir=os.path.join(model.cfg.output_dir, cache_subdir),
                        context=(model.fingerprint_context(), both_starts),
                        workers=run['workers'], timeout=run['job_timeout'], recompute=run['recompute'],
-                       describe=note)
+                       describe=note, log=log)
     for res in results.values():
         res['row'] = res['job']['row']
     return results

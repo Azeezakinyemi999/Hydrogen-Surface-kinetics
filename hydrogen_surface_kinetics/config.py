@@ -35,6 +35,57 @@ RUN_DEFAULTS = dict(
     recompute=False,                # True = ignore cached results
 )
 
+# One section per analysis. None = take it from the main settings (see each module).
+ANALYSIS_DEFAULTS = dict(
+    composition=dict(
+        min_listed=1e-3,            # list species above this coverage
+        min_plotted=0.02,           # a species gets its own bar segment if it reaches this anywhere
+        max_named=7,                # at most this many named segments; the rest is "other"
+    ),
+    diagnostics=dict(
+        adsorption_checks=[],       # (label, {reactants}, {products}, (lit. dH lo, hi) kJ/mol, note)
+        switch_off=None,            # species whose reactions are switched off in a what-if; None = molecular_adsorbate
+        switch_off_cases=None,      # cases for the what-if; None = reference + every impurity
+        top_reactions=[],           # (case, T, species): largest sources/sinks of that species
+        top_n=5,
+    ),
+    curves=dict(
+        ratios=[1e-6, 3e-6, 1e-5, 3e-5, 1e-4, 3e-4, 1e-3, 3e-3, 1e-2, 3e-2, 0.1, 0.25],
+        temperatures=None,          # None = the main temperatures
+        impurities=None,            # None = every impurity
+    ),
+    sweep=dict(
+        temperatures=None,          # None = from the lowest to the highest main temperature in 50 K steps
+        step=50.0,
+        ratio=None,                 # None = impurity_ratio
+        impurities=None,
+    ),
+    orders=dict(temperatures=None, ratio=None, delta=0.10, impurities=None),
+    rate_control=dict(
+        temperatures=None,
+        cases=None,                 # None = reference + every impurity
+        ratio=None,
+        drc_delta=0.05,             # relative change of each screened reaction's rate constants
+        drc_top_n=20,               # reactions screened, by |net rate| at the base steady state
+        trc_delta=1.0e6,            # J/kmol (1 kJ/mol) change of a species' free energy
+        trc_min_coverage=1e-3,      # species screened for TRC (plus the role species)
+    ),
+    paths=dict(
+        conditions=None,            # [(case, T), ...]; None = every main case at the lowest temperature
+        elements=None,              # None = the elements of the probe gas
+        threshold=1e-8,             # hide fluxes below this fraction of the largest
+        flow_type='OneWayFlow',     # 'OneWayFlow' (needed near equilibrium) or 'NetFlow'
+        formats=['png'],            # Graphviz output formats, e.g. ['png', 'pdf']
+    ),
+    transients=dict(
+        temperatures=None,
+        impurities=None,
+        ratios=[1e-6, 1e-4, 1e-2, 0.25],
+        t_start=1e-9, t_stop=1e8, per_decade=4,   # s: recording times
+    ),
+)
+ANALYSIS_ORDER = ['steady_state', *ANALYSIS_DEFAULTS]
+
 DEFAULTS = dict(
     # files
     mechanism=None,                 # Cantera YAML (required)
@@ -48,6 +99,8 @@ DEFAULTS = dict(
     probe_adsorbate=None,           # required: the dissociated adsorbate, e.g. 'HX(11)'
     molecular_adsorbate=None,       # optional: molecularly adsorbed probe gas
     reference_label='probe only',   # case name of the probe-gas-only reference
+    probe_label=None,               # name of the probe gas in plots; None = its formula, e.g. 'H2'
+    species_labels={},              # readable plot names for surface species: {mechanism name: label}
     # impurities: label -> species name, or elemental composition dict
     impurities={},
     mixture_label='all',            # case name of all impurities together; None = no mixture case
@@ -65,9 +118,11 @@ DEFAULTS = dict(
     solver=SOLVER_DEFAULTS,
     run=RUN_DEFAULTS,
     plot_style='screen',            # 'screen' or 'publication'
+    publication_width_cm=17.8,      # 17.8 = double column, 8.5 = single column
+    **ANALYSIS_DEFAULTS,
 )
 
-DICT_SECTIONS = ('solver', 'run', 'input_basis')
+DICT_SECTIONS = ('solver', 'run', 'input_basis', *ANALYSIS_DEFAULTS)
 PATH_KEYS = ('mechanism', 'output_dir')
 REQUIRED = ('mechanism', 'probe_gas', 'empty_site', 'probe_adsorbate')
 SITE_DENSITY_UNITS = {'mol/cm2': 10.0, 'mol/m2': 1e-3, 'kmol/m2': 1.0}   # factor to kmol/m2
@@ -170,6 +225,15 @@ def check_config(cfg):
             problems.append(f"'expected_site_density' must be (value, unit) with unit in {list(SITE_DENSITY_UNITS)}")
     if cfg.plot_style not in ('screen', 'publication'):
         problems.append("'plot_style' must be 'screen' or 'publication'")
+    analyses = [cfg.analyses] if isinstance(cfg.analyses, str) else list(cfg.analyses)
+    bad = [a for a in analyses if a not in ANALYSIS_ORDER]
+    if bad:
+        problems.append(f"unknown analyses {bad}; choose from {ANALYSIS_ORDER}")
+    cfg['analyses'] = analyses
+    for name, defaults in ANALYSIS_DEFAULTS.items():
+        unknown = set(cfg[name]) - set(defaults)
+        if unknown:
+            problems.append(f"unknown '{name}' settings: {sorted(unknown)}")
     unknown = set(cfg.solver) - set(SOLVER_DEFAULTS)
     if unknown:
         problems.append(f"unknown solver settings: {sorted(unknown)}")
