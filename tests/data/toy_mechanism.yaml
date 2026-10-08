@@ -1,0 +1,71 @@
+# Toy surface mechanism used only to illustrate the simulation workflow documentation.
+# All species, elements and parameters are made up. It is not a model of any real system.
+#
+#   A2 : probe gas, adsorbs dissociatively on two empty sites (the "probe reaction")
+#   I  : impurity gas, adsorbs on one site; its adsorbate can spread onto a second site
+#   AI : gas product of the surface reaction A(s) + I(s)
+#   S  : an empty surface site
+description: Toy A2 / I surface mechanism for documentation figures (fictitious)
+
+units: {length: cm, quantity: mol, activation-energy: kJ/mol}
+
+elements:
+- symbol: Ax
+  atomic-weight: 16.0
+- symbol: Ix
+  atomic-weight: 28.0
+- symbol: X
+  atomic-weight: 100.0
+
+phases:
+- name: gas
+  thermo: ideal-gas
+  elements: [Ax, Ix]
+  species: [A2, I, AI]
+  kinetics: gas
+  reactions: none
+  state: {T: 500.0, P: 1 atm, X: {A2: 1.0}}
+
+- name: surface
+  thermo: ideal-surface
+  adjacent-phases: [gas]
+  elements: [Ax, Ix, X]
+  species: [S, A(s), I(s), I(ss)]
+  kinetics: surface
+  reactions: all
+  site-density: 2.5e-09
+  state: {T: 500.0, P: 1 atm, coverages: {S: 1.0}}
+
+species:
+- name: A2
+  composition: {Ax: 2}
+  thermo: {model: constant-cp, T0: 298.15 K, h0: 0.0 kJ/mol, s0: 205.0 J/mol/K, cp0: 29.0 J/mol/K}
+- name: I
+  composition: {Ix: 1}
+  thermo: {model: constant-cp, T0: 298.15 K, h0: 0.0 kJ/mol, s0: 198.0 J/mol/K, cp0: 29.0 J/mol/K}
+- name: AI
+  composition: {Ax: 1, Ix: 1}
+  thermo: {model: constant-cp, T0: 298.15 K, h0: -280.0 kJ/mol, s0: 214.0 J/mol/K, cp0: 37.0 J/mol/K}
+- name: S
+  composition: {X: 1}
+  thermo: {model: constant-cp, T0: 298.15 K, h0: 0.0 kJ/mol, s0: 0.0 J/mol/K, cp0: 0.0 J/mol/K}
+- name: A(s)
+  composition: {Ax: 1, X: 1}
+  thermo: {model: constant-cp, T0: 298.15 K, h0: -40.0 kJ/mol, s0: 30.0 J/mol/K, cp0: 20.0 J/mol/K}
+- name: I(s)
+  composition: {Ix: 1, X: 1}
+  thermo: {model: constant-cp, T0: 298.15 K, h0: -140.0 kJ/mol, s0: 60.0 J/mol/K, cp0: 30.0 J/mol/K}
+- name: I(ss)
+  composition: {Ix: 1, X: 2}
+  sites: 2
+  thermo: {model: constant-cp, T0: 298.15 K, h0: -165.0 kJ/mol, s0: 45.0 J/mol/K, cp0: 30.0 J/mol/K}
+
+reactions:
+- equation: A2 + 2 S <=> 2 A(s)       # R1, the probe reaction (dissociative adsorption)
+  sticking-coefficient: {A: 0.05, b: 0.0, Ea: 0.0}
+- equation: I + S <=> I(s)            # R2, impurity adsorption
+  sticking-coefficient: {A: 0.8, b: 0.0, Ea: 0.0}
+- equation: I(s) + S <=> I(ss)        # R3, impurity spreads onto a second site
+  rate-constant: {A: 4.0e+21, b: 0.0, Ea: 40.0}
+- equation: A(s) + I(s) <=> AI + 2 S  # R4, surface reaction removing A and I
+  rate-constant: {A: 4.0e+21, b: 0.0, Ea: 85.0}
