@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "Hydrogen-Surface-kinetics"
+version = "0.1.0"
+description = "Steady-state and transient analysis of surface reaction mechanisms with Cantera: probe-reaction rates, impurity poisoning, surface composition, sensitivities."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "cantera>=3.0",
+    "numpy",
+    "pandas",
+    "matplotlib",
+]
+
+[project.optional-dependencies]
+# Flux diagrams (Stage 2) also need RMG-Py, RDKit, Graphviz and ffmpeg, installed separately.
+test = ["pytest"]
+
+[tool.setuptools.packages.find]
+include = ["hydrogen_surface_kinetics*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

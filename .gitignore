@@ -1,0 +1,20 @@
+# Run outputs (each run's output folder, logs)
+runs/*/output/
+runs/*/*.log
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+
+# Notebooks
+.ipynb_checkpoints/
+
+# OS / editors
+.DS_Store
+.vscode/
+.playwright-mcp/
