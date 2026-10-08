@@ -1,4 +1,6 @@
 """Readable names for species in tables and plots."""
+import re
+
 ORDER = ['C', 'H', 'N', 'O']
 SITE_ELEMENTS = {'X', 'Pt', 'Ni', 'Cu', 'Pd', 'Rh', 'Ru', 'Fe', 'Co', 'Ag', 'Au', 'Ir'}
 
@@ -27,5 +29,5 @@ def species_label(model, name):
         return f + star
     if name == model.molecular_adsorbate:
         return f'{f}{star} (molecular)'
-    number = name.rsplit('(', 1)[-1].rstrip(')') if name.endswith(')') else ''
-    return f'{f}{star}' + (f' #{number}' if number else '')
+    m = re.search(r'\((\d+)\)$', name)                 # RMG's species number, e.g. 'OCX(13)'
+    return f'{f}{star}' + (f' #{m.group(1)}' if m else '')
