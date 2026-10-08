@@ -29,8 +29,9 @@ def test_config_lists_every_problem(tmp_path):
 
 
 def test_keyword_overrides(tmp_path):
-    cfg = hsk.load_config(write_input(tmp_path), temperatures=[450, 550])
+    cfg = hsk.load_config(write_input(tmp_path), temperatures=[450, 550], run={'recompute': True})
     assert cfg.temperatures == [450.0, 550.0]
+    assert cfg.run['recompute'] and cfg.run['workers'] == 2   # merged into the input file's section
 
 
 # --- model ----------------------------------------------------------------------------

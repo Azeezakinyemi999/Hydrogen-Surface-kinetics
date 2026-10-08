@@ -78,3 +78,12 @@ orders = {'temperatures': [300.0]}
 rate_control = {'temperatures': [300.0], 'cases': ['H2 only', 'CO', 'NH3']}
 paths = {'conditions': [('H2 only', 300.0), ('CO', 300.0), ('NH3', 300.0)], 'elements': ['H']}
 transients = {'temperatures': [300.0]}
+
+# Optional (needs RMG-Py): flux-diagram videos of the RMG input's 27 batch reactors.
+# Run with:  bash run.sh runs/ni_first_try --only flux
+_RMG_RUN = '/Users/akinyemi.az/Desktop/PhD_Folder/research/MHI/Surface-Impurity-Effect/rmg_runs/Ni/first_try_saved'
+flux = {
+    'rmg_path': '/Users/akinyemi.az/CoMoCheng/WESTLAB/rms_rmg_new/RMG-Py',
+    'rmg_input': _RMG_RUN + '/input.py',
+    'seed_dir': _RMG_RUN + '/seed/seed',
+}

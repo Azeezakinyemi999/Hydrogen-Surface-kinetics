@@ -83,6 +83,18 @@ ANALYSIS_DEFAULTS = dict(
         ratios=[1e-6, 1e-4, 1e-2, 0.25],
         t_start=1e-9, t_stop=1e8, per_decade=4,   # s: recording times
     ),
+    # Optional, needs RMG-Py (+ RDKit, Graphviz, ffmpeg): flux-diagram videos of the RMG
+    # input file's own batch reactors. Paths are relative to this input file.
+    flux=dict(
+        rmg_path=None,              # RMG-Py source folder, if rmgpy is not importable already
+        rmg_input=None,             # the RMG input.py with the surfaceReactor blocks (required)
+        seed_dir=None,              # seed mechanism folder with reactions.py + dictionary.txt (required)
+        species_dir=None,           # structure images (drawn if missing); None = <output>/flux_species
+        reactor_indices=None,       # None = every reactor in rmg_input; or e.g. [0, 6, 24]
+        n_points=100,               # time points per reactor (~45 for a quick check)
+        rtol=1e-10, atol=1e-22,     # Cantera's defaults fail on stiff 300 K reactors
+        skip_existing=True,         # skip reactors whose folder already has flux_diagram.avi
+    ),
 )
 ANALYSIS_ORDER = ['steady_state', *ANALYSIS_DEFAULTS]
 
@@ -169,8 +181,7 @@ def load_config(path, **overrides):
     namespace = runpy.run_path(path)
     values = {k: v for k, v in namespace.items()
               if not k.startswith('_') and not isinstance(v, (types.ModuleType, types.FunctionType, type))}
-    values.update(overrides)
-    cfg = Config(_merge(DEFAULTS, values))
+    cfg = Config(_merge(_merge(DEFAULTS, values), overrides))      # overrides merge into sections too
     cfg['input_file'] = path
     cfg['run_dir'] = os.path.dirname(path)
     for key in PATH_KEYS:
