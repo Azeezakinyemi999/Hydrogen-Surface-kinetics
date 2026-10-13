@@ -7,11 +7,11 @@ Stage 11d).
 Every perturbed steady state starts from a clean surface: a warm start from the base
 looks converged at once and misses slow re-equilibration.
 Runs at every point of the temperature and pressure series.
-Outputs: sensitivity.csv; rate_control_vs_T.png and, with a pressure series,
-rate_control_vs_P.png (TRC per case and point, plus the reaction orders when the 'orders'
-analysis has run).
+Outputs: sensitivity.csv; one figure per point, rate_control_<T>K_<P>bar.png: TRC per case,
+the DRC where it is not trivial, and the reaction orders when the 'orders' analysis has run.
 """
 import os
+import re
 
 import cantera as ct
 import matplotlib.pyplot as plt
@@ -132,11 +132,12 @@ def run(ctx):
             ctx.log(part[['X_tof_fwd', 'X_probe_consumed', 'methods', 'label']].head(8)
                     .to_string(index=False, float_format=lambda v: f'{v:+.3f}'))
     orders = orders_table(ctx)
-    for series in C.SERIES:
-        fig = plot_rate_control(ctx, sens, orders, series)
-        if fig is not None:
-            P.save(fig, ctx.path(common.series_file('rate_control', series)), cfg)
-            plt.close(fig)
+    if len(sens):
+        for T, Pb in sens[['T_K', 'P_ref_bar']].drop_duplicates().sort_values(['T_K', 'P_ref_bar']).itertuples(index=False):
+            fig = plot_rate_control(ctx, sens, orders, T, Pb)
+            if fig is not None:
+                P.save(fig, ctx.path(f'rate_control_{T:.0f}K_{Pb:g}bar.png'), cfg)
+                plt.close(fig)
     ctx.outputs['rate_control'] = {'base': base, 'perturbed': pert, 'sensitivity': sens}
     return ctx.outputs['rate_control']
 
@@ -152,60 +153,107 @@ def orders_table(ctx):
     return None
 
 
-def plot_rate_control(ctx, sens, orders=None, series='temperature', min_abs=0.01):
-    """For one series. Top: TRC of the forward probe rate, a row of panels (one per case) per
-    point, species with |X| >= min_abs. Bottom (if orders are given): the reaction orders in
-    the probe gas and the impurity, one panel per point."""
+def drc_nontrivial(part, tol=0.02):
+    """Is this (point, case)'s DRC worth a panel? Yes if the net probe-gas consumption has a
+    DRC (it is far from equilibrium), or if the forward-rate DRC is not simply 1 on one step."""
+    if part.empty:
+        return False
+    if part['X_probe_consumed'].notna().any():
+        return True
+    x = part['X_tof_fwd'].abs().dropna().sort_values(ascending=False).to_numpy()
+    return len(x) > 0 and not (abs(x[0] - 1) < tol and (len(x) == 1 or x[1] < tol))
+
+
+def short_equation(model, eq, width=42):
+    """A reaction equation with readable species names, shortened to `width` characters."""
+    surface = set(model.species_names)
+
+    def name(term):
+        n, _, sp = term.partition(' ') if term[:1].isdigit() and ' ' in term else ('', '', term)
+        label = species_label(model, sp) if sp in surface else re.sub(r'\(\d+\)$', '', sp)
+        return f'{n} {label}' if n else label
+    sides = [' + '.join(name(t.strip()) for t in side.split(' + ')) for side in re.split(r'\s*<=>\s*|\s*=>\s*', eq)]
+    text = ' <=> '.join(sides)
+    return text if len(text) <= width else text[:width - 1] + '…'
+
+
+def plot_rate_control(ctx, sens, orders, T, Pb, min_abs=0.01, per_row=4):
+    """One point (T, P): the TRC of the forward probe rate per case (species with |X| >= min_abs);
+    the DRC of the forward rate and of the net probe-gas consumption per case, only if it is
+    not trivial at this point; and the reaction orders, if the orders analysis ran. Cases are
+    wrapped at `per_row` panels per row."""
     if orders is not None and 'P_ref_bar' not in orders:
         orders = None                          # a table from before the pressure series: no point to match
-    if sens.empty:
-        return None
-    trc = C.in_series(sens[sens['kind'] == 'TRC'], series)
+    at = sens[(sens['T_K'] == T) & (sens['P_ref_bar'] == Pb)]
+    trc, drc = at[at['kind'] == 'TRC'], at[at['kind'] == 'DRC']
     if trc.empty:
         return None
-    order = case_labels(ctx.cfg)
-    pts = list(trc[['T_K', 'P_ref_bar']].drop_duplicates().sort_values(['T_K', 'P_ref_bar']).itertuples(index=False))
-    cases = [c for c in order if c in set(trc['case'])]
-    ord_pts = [] if orders is None else [p for p in pts
-                                         if ((orders['T_K'] == p[0]) & (orders['P_ref_bar'] == p[1])).any()]
-    ncol = len(cases)
-    mosaic = ([[f't{i}_{j}' for j in range(ncol)] for i in range(len(pts))]
-              + [[f'o{i}'] * ncol for i in range(len(ord_pts))])
-    fig, axd = plt.subplot_mosaic(mosaic, figsize=(max(3.4 * ncol, 8.0), 2.7 * len(pts) + 3.2 * len(ord_pts)),
-                                  height_ratios=[1.0] * len(pts) + [1.15] * len(ord_pts))
+    cases = [c for c in case_labels(ctx.cfg) if c in set(trc['case'])]
+    o = None if orders is None else orders[(orders['T_K'] == T) & np.isclose(orders['P_ref_bar'], Pb)]
+    show_orders = o is not None and len(o) > 0
+    show_drc = any(drc_nontrivial(drc[drc['case'] == c]) for c in cases)
+    ncol = min(per_row, len(cases))
+    chunks = [cases[i:i + ncol] for i in range(0, len(cases), ncol)]
+
+    def rows(prefix):
+        return [[f'{prefix}{case}' for case in ch] + ['.'] * (ncol - len(ch)) for ch in chunks]
+    mosaic = rows('t:') + (rows('d:') if show_drc else []) + ([['o'] * ncol] if show_orders else [])
+    heights = [1.0] * len(chunks) + [1.1] * (len(chunks) if show_drc else 0) + ([1.15] if show_orders else [])
+    fig, axd = plt.subplot_mosaic(mosaic, figsize=(max(3.4 * ncol, 8.0) + 1.5 * show_drc, 2.7 * sum(heights)),
+                                  height_ratios=heights)
     xmin = min(-2.2, trc['X_tof_fwd'].min() * 1.15)
     xmax = max(0.75, trc['X_tof_fwd'].max() * 1.15 + 0.6)
-    for i, (T, Pb) in enumerate(pts):
-        for j, case in enumerate(cases):
-            ax = axd[f't{i}_{j}']
-            part = trc[(trc['T_K'] == T) & (trc['P_ref_bar'] == Pb) & (trc['case'] == case)]
-            show = part[part['X_tof_fwd'].abs() >= min_abs].sort_values('X_tof_fwd', key=abs, ascending=False)
+    where = f'{T:.0f} K, {Pb:g} bar'
+    for case in cases:
+        ax = axd[f't:{case}']
+        part = trc[trc['case'] == case]
+        show = part[part['X_tof_fwd'].abs() >= min_abs].sort_values('X_tof_fwd', key=abs, ascending=False)
+        y = np.arange(len(show))[::-1]
+        ax.barh(y, show['X_tof_fwd'], height=0.6, color=P.SERIES_COLORS[0], zorder=2)
+        for yi, x in zip(y, show['X_tof_fwd']):                  # values beside the zero line, clear of the names
+            ax.annotate(P.signed(x), (max(x, 0), yi), xytext=(4, 0), textcoords='offset points',
+                        ha='left', va='center', fontsize=8, color=P.SECONDARY_INK)
+        ax.set_yticks(y, [l.split('  [')[0] for l in show['label']])
+        ax.set_ylim(-0.6, max(len(show), 2) - 0.4)
+        ax.axvline(0, color=P.MUTED, lw=0.8, zorder=1)
+        ax.set_xlim(xmin, xmax)
+        ax.set_xlabel(f'$X_{{TRC}}$ of the forward rate (sum {P.signed(part["X_tof_fwd"].sum())})',
+                      fontsize=9, color=P.INK)
+        P.style_axis(ax)
+        P.keep_title(ax, f'{case}, {where}')
+        ax.grid(axis='y', visible=False)
+        ax.grid(axis='x', color=P.GRID, linewidth=0.6)
+    if show_drc:
+        for case in cases:
+            ax = axd[f'd:{case}']
+            part = drc[drc['case'] == case]
+            size = part[['X_tof_fwd', 'X_probe_consumed']].abs().max(axis=1)
+            show = part[size >= min_abs].assign(_size=size).sort_values('_size', ascending=False).head(6)
             y = np.arange(len(show))[::-1]
-            ax.barh(y, show['X_tof_fwd'], height=0.6, color=P.SERIES_COLORS[0], zorder=2)
-            for yi, x in zip(y, show['X_tof_fwd']):              # values beside the zero line, clear of the names
-                ax.annotate(P.signed(x), (max(x, 0), yi), xytext=(4, 0), textcoords='offset points',
-                            ha='left', va='center', fontsize=8, color=P.SECONDARY_INK)
-            ax.set_yticks(y, [l.split('  [')[0] for l in show['label']])
+            for col, dy, color in (('X_tof_fwd', 0.19, P.SERIES_COLORS[0]), ('X_probe_consumed', -0.19, P.SERIES_COLORS[1])):
+                ax.barh(y + dy, np.nan_to_num(show[col].to_numpy(dtype=float)), height=0.36, color=color, zorder=2)
+            ax.set_yticks(y, [f"#{int(r.item)}: {short_equation(ctx.model, r.label)}" for r in show.itertuples()],
+                          fontsize=7)
             ax.set_ylim(-0.6, max(len(show), 2) - 0.4)
             ax.axvline(0, color=P.MUTED, lw=0.8, zorder=1)
-            ax.set_xlim(xmin, xmax)
-            ax.set_xlabel(f'$X_{{TRC}}$ of the forward rate (sum {P.signed(part["X_tof_fwd"].sum())})',
+            net_sum = part['X_probe_consumed'].sum(min_count=1)
+            ax.set_xlabel('$X_{DRC}$' + (f' (net sum {P.signed(net_sum)})' if np.isfinite(net_sum) else ''),
                           fontsize=9, color=P.INK)
             P.style_axis(ax)
-            P.keep_title(ax, f'{case}, {T:.0f} K, {Pb:g} bar')
+            P.keep_title(ax, f'{case}, {where}: DRC')
             ax.grid(axis='y', visible=False)
             ax.grid(axis='x', color=P.GRID, linewidth=0.6)
     probe = probe_label(ctx.model)
-    for i, (T, Pb) in enumerate(ord_pts):
-        ax = axd[f'o{i}']
-        o = orders[(orders['T_K'] == T) & (orders['P_ref_bar'] == Pb)].set_index('case')
-        cs = [c for c in order if c in o.index]
+    handles, labels = [], []
+    if show_orders:
+        ax = axd['o']
+        o = o.set_index('case')
+        cs = [c for c in case_labels(ctx.cfg) if c in o.index]
         x = np.arange(len(cs))
         for col, dx, color, marker, lab in (('order_probe', -0.12, P.SERIES_COLORS[0], 'o', f'order in {probe}'),
                                            ('order_impurity', 0.12, P.SERIES_COLORS[1], 's', 'order in the impurity')):
             vals = o.loc[cs, col].to_numpy(dtype=float)
-            ax.plot(x + dx, vals, ls='', marker=marker, ms=8, color=color, mec='white', mew=0.8, zorder=3,
-                    label=lab if i == 0 else None)
+            ax.plot(x + dx, vals, ls='', marker=marker, ms=8, color=color, mec='white', mew=0.8, zorder=3, label=lab)
             for xi, v in zip(x + dx, vals):
                 if np.isfinite(v) and abs(v) >= 0.1:                   # label only the orders that matter
                     ax.annotate(P.signed(v), (xi, v), xytext=(0, 7 if v > 0 else -7), textcoords='offset points',
@@ -217,12 +265,15 @@ def plot_rate_control(ctx, sens, orders=None, series='temperature', min_abs=0.01
         lo, hi = (np.nanmin(vals_all), np.nanmax(vals_all)) if np.isfinite(vals_all).any() else (0.0, 0.0)
         ax.set_ylim(min(lo, -0.5) - 0.5, max(hi, 0.5) + 0.5)
         P.style_axis(ax, ylabel='reaction order  d ln TOF / d ln p')
-        P.keep_title(ax, f'reaction orders, {T:.0f} K, {Pb:g} bar')
-    if ord_pts:
-        handles, labels = axd['o0'].get_legend_handles_labels()
+        P.keep_title(ax, f'reaction orders, {where}')
+        handles, labels = ax.get_legend_handles_labels()
+    if show_drc:
+        handles += [plt.Rectangle((0, 0), 1, 1, color=P.SERIES_COLORS[0]), plt.Rectangle((0, 0), 1, 1, color=P.SERIES_COLORS[1])]
+        labels += ['DRC of the forward rate', f'DRC of net {probe} consumption']
+    if handles:
         fig.legend(handles, labels, loc='upper center', bbox_to_anchor=(0.5, 1.02), ncol=len(labels),
                    frameon=False, fontsize=9)
-    fig.suptitle(f'What controls the rate ({series} series): thermodynamic rate control and reaction orders',
+    fig.suptitle(f'What controls the rate, {where}: thermodynamic rate control, DRC and reaction orders',
                  x=0.01, ha='left', fontsize=11)
     fig.tight_layout(rect=(0, 0, 1, 0.95))
     return fig

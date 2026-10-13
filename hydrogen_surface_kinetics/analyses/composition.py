@@ -132,3 +132,57 @@ def plot_surface_composition(ctx, data, series, named, colors, basis='fixed_prob
     fig.suptitle(f'What covers the surface at steady state ({basis}, {series} series)', x=0.01, ha='left', fontsize=11)
     fig.tight_layout()
     return fig
+
+
+def plot_coverage_bars(ctx, cov, cases, xs, xlabel, title, log_x=False):
+    """Stacked coverages against one varied quantity: one bar per solved x (cov indexed by
+    (case, x)), one panel per case. Species keep the colors of the surface-composition figure
+    where it ran in this session. log_x: bars evenly spaced in log10(x) (pressures)."""
+    model, s = ctx.model, ctx.cfg.composition
+    site = model.site
+    base = ctx.outputs.get('composition', {}).get('colors')
+    named, colors = species_palette(cov, site, s, base)
+    xs = sorted(float(x) for x in xs)
+    pos = (lambda x: np.log10(np.asarray(x, dtype=float))) if log_x else (lambda x: np.asarray(x, dtype=float))
+    steps = np.diff(pos(xs))
+    width = 0.8 * (np.min(steps) if len(steps) else (0.5 if log_x else 50.0))
+    ncol = min(3, len(cases))
+    nrow = int(np.ceil(len(cases) / ncol))
+    fig, axes = plt.subplots(nrow, ncol, figsize=(4.4 * ncol, 3.3 * nrow), sharex=True, sharey=True, squeeze=False)
+    layer_names = [site] + named + ['other']
+    color_of = lambda n: colors.get(n, P.EMPTY_COLOR if n == site else P.OTHER_COLOR)   # noqa: E731
+    for ax, case in zip(axes.flat, cases):
+        part = cov.xs(case, level='case')
+        part = part[part.index.isin(xs)].sort_index()                 # solved values only: gaps elsewhere
+        stack = {site: part[site] if site in part else pd.Series(0.0, index=part.index),
+                 'other': part.drop(columns=[site] + named, errors='ignore').sum(axis=1)}
+        stack.update({n: part[n] for n in named if n in part})
+        bottom = np.zeros(len(part))
+        for n in layer_names:
+            if n in stack:
+                vals = stack[n].to_numpy(dtype=float)
+                ax.bar(pos(part.index), vals, bottom=bottom, width=width, color=color_of(n), edgecolor='white',
+                       linewidth=0.8)
+                bottom = bottom + vals
+        ax.set_ylim(0, 1)
+        ax.set_xlim(pos(xs[0]) - width, pos(xs[-1]) + width)
+        if log_x:                                                     # ticks at whole decades, labeled in x
+            decades = np.arange(np.floor(pos(xs[0])), np.ceil(pos(xs[-1])) + 1)
+            ax.set_xticks(decades, [f'{10 ** d:g}' for d in decades])
+        P.style_axis(ax)
+        P.keep_title(ax, case)
+    for ax in axes.flat[len(cases):]:
+        ax.set_visible(False)
+    for ax in axes[:, 0]:
+        ax.set_ylabel('fraction of sites', fontsize=10, color=P.INK)
+    for j in range(ncol):                                             # x label under the lowest panel of each column
+        col = [axes[i][j] for i in range(nrow) if axes[i][j].get_visible()]
+        col[-1].set_xlabel(xlabel, fontsize=10, color=P.INK)
+        col[-1].xaxis.set_tick_params(labelbottom=True)
+    handles = [plt.Rectangle((0, 0), 1, 1, color=color_of(n)) for n in layer_names]   # stack order, top first
+    labels = ['empty site'] + [species_label(model, n) for n in named] + ['other']
+    fig.legend(handles[::-1], labels[::-1], loc='center left', bbox_to_anchor=(1.0, 0.5),
+               frameon=False, fontsize=9, title='Surface species', title_fontsize=9)
+    fig.suptitle(title, x=0.01, ha='left', fontsize=11)
+    fig.tight_layout()
+    return fig

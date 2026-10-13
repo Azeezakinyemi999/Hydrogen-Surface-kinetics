@@ -1,7 +1,7 @@
 """How many steady states (or transients) each chosen analysis needs, and how many are
 already cached, without solving anything. Shown by `check`.
 
-Exact for the analyses built on condition tables (main, curves, sweep, orders). For
+Exact for the analyses built on condition tables (main, curves, sweeps, orders). For
 rate_control and transients the job list depends on solved states (the screened reactions,
 the starting surface), so their counts are estimates and their cache check goes by name.
 """
@@ -36,7 +36,7 @@ def _where(case, pt):
 
 def counts(ctx, names):
     """DataFrame: analysis, points, solves, cached, to_solve, note."""
-    from . import curves, orders, sweep
+    from . import curves, orders, pressure_sweep, sweep
     cfg = ctx.cfg
     rows = []
 
@@ -60,6 +60,14 @@ def counts(ctx, names):
     if 'sweep' in names:
         add('sweep', len(sweep.sweep_temperatures(ctx)), *_exact(ctx, sweep.sweep_conditions(ctx)),
             'temperature only, at reference_pressure')
+    if 'pressure_sweep' in names:
+        n_pts = len(pressure_sweep.sweep_pressures(ctx)) * len(pressure_sweep.sweep_temperatures(ctx))
+        add('pressure_sweep', n_pts, *_exact(ctx, pressure_sweep.sweep_conditions(ctx)),
+            'pressure only, at pressure_temperatures')
+    if 'convergence' in names:
+        conds = cfg.convergence['conditions']
+        n = len(conds) if conds else f"<= {cfg.convergence['max_conditions']}"
+        add('convergence', 0, 0, 0, f'{n} traces to reactor_t_max (failed main conditions by default)')
     if 'orders' in names:
         add('orders', len(common.points(ctx, 'orders')), *_exact(ctx, orders.order_conditions(ctx)), 'two starts each')
     if 'rate_control' in names:

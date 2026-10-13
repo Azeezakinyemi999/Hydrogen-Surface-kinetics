@@ -161,7 +161,7 @@ flowchart TD
 | 8 | Surface composition | results | coverage tables, bar chart | `analyses/composition.py` |
 | 9 | Rate plots | summary table | `rates_summary_vs_T.png`, `_vs_P.png` | `analyses/steady_state.py` |
 | 10 | Mechanism diagnostics | mechanism, results | binding check, what-if runs, traces | `analyses/diagnostics.py` |
-| 11 | Further analyses | the Stage 4–6 solver, results | poisoning curves, temperature sweep, orders, rate control, path diagrams, transients | `analyses/curves.py` … `analyses/transients.py` |
+| 11 | Further analyses | the Stage 4–6 solver, results | poisoning curves, temperature and pressure sweeps, orders, rate control, path diagrams, transients | `analyses/curves.py` … `analyses/transients.py` |
 
 Paths are inside the package folder `hydrogen_surface_kinetics/`; the [Code map](#code-map) lists every file. Each analysis is chosen by its name in `analyses = [...]` of the run's `settings.py` ([Running an analysis](#running-an-analysis)). The RMG input of a run is also called `input.py`; in this document `input.py` always means RMG's file, and `settings.py` the package's.
 
@@ -507,6 +507,8 @@ $$p_{A_2} = p_{\mathrm{point}}, \qquad p_{I_j} = r\,p_{A_2}\ \ \text{for each im
 
 Along the pressure series the impurity therefore keeps the same purity ($r$ = `impurity_ratio`), and every partial pressure scales together. With `mixture_mode = 'split'`, each impurity in the mixture gets $r/N_I$ instead of $r$.
 
+*One ratio per impurity.* `impurity_ratio` can also be a dict, `{impurity label: r_j}`, with an entry for every impurity. Each impurity alone is then at its own level, and the all-impurities case has every impurity at its own level together, so its gas is exactly a given composition. For an RMG reactor with initial amounts $n_k$ (any units, as in `initialGasMoleFractions`), $r_j = n_j / n_{A_2}$; for example `{'CO': 1 / 190, 'H2O': 10 / 190, ...}` reproduces a reactor with 190 parts H₂, 1 part CO and 10 parts H₂O. `mixture_mode = 'split'` needs a single number. Condition names then say `r=per-impurity` instead of a number.
+
 *Fixed mole fractions* (basis `input_X`, a check). Mole fractions are taken from `input_basis` (by default those of the RMG reactor definitions of the first Ni run: 0.8/0.2 for a single impurity, 0.75 + 0.05 each in the mixture, renormalized), at total pressure $P = p_{\mathrm{point}}$, so $p_{A_2} = x_{A_2}P$ and adding an impurity dilutes the probe gas. The ratio $\mathrm{TOF}(\texttt{input\_X})/\mathrm{TOF}(\texttt{fixed\_probe})$ for the same case and point isolates that dilution effect.
 
 *Labels are not physics.* `P_ref_bar` and `series` describe where a point sits in the study. They are kept out of the cache fingerprint (Stage 6), so adding a temperature to the pressure series, for instance, relabels an existing point from `temperature` to `both` without solving it again.
@@ -604,6 +606,8 @@ with defaults $\varepsilon_{\mathrm{abs}} = 10^{-8}$ s⁻¹, $\varepsilon_{\math
 
 *Figure 4. Toy model, clean start. (a) Coverages and (b) the forward probe TOF settle in stages. (c) The normalized residual falls below 1 only once the slow species have settled; the reactor method accepts the first half-decade checkpoint at which the residual test passes and TOF and coverages have stopped changing since the previous checkpoint.*
 
+**On real data** (`convergence` analysis, `convergence.png`). The same trace for chosen conditions of the run: by default the main conditions whose clean start did not converge, otherwise the reference case at the first point. The surface is integrated exactly as the reactor method does, every checkpoint is recorded (`convergence.csv`), and the integration continues to `reactor_t_max`, so a figure shows both where the state was accepted (dotted line) and what happens afterwards. For a failed condition it shows why: for example a coverage still drifting at $10^{8}$ s. A residual that climbs back above 1 after acceptance means the accepted state was a long-lived intermediate, not the final steady state; check such conditions before relying on them. Code: `analyses/convergence.py` (`trace`, `plot_convergence`).
+
 **Design choices.**
 - **Two methods with a fallback.** The Newton solve is fast but fragile; time integration is robust but slower.
 - **Absolute plus relative residual.** An absolute threshold alone cannot be met by species that turn over $10^{8}$–$10^{9}$ times per second, where round-off alone gives residuals of $10^{-8}$–$10^{-7}$ s⁻¹. A relative threshold alone would accept a large absolute residual on a slow species. A test relative to the *probe TOF* was tried and rejected: when the probe reaction is very slow, such as under strong poisoning, it accepted surfaces that were still evolving.
@@ -669,7 +673,7 @@ flowchart LR
 
 **Interpreting the result.**
 - **Agree**: one steady state was reached from two very different starts. This is evidence, not proof, of uniqueness.
-- **Disagree**: at least two steady states exist. Report both, and map the window by sweeping the impurity pressure up from a clean start and down from a covered start (poisoning curves, [Stage 11.1](#111-poisoning-curves)).
+- **Disagree**: at least two steady states exist. Report both, and map the window by sweeping the impurity pressure up from a clean start and down from a covered start (poisoning curves, [Stage 11.1](#111-poisoning-curves)). The poisoning-curve figures draw the start-B branch (dashed, open squares where it differs) and shade the window, the real-data version of Figure 5; the tables carry start B's `tof_fwd_B`, `poisoning_factor_B`, `theta_free_B` and `theta_impurity_B`.
 - **One start fails**: agreement is recorded as unknown (`None`).
 
 ## Stage 6: Batch execution, time limits and caching
@@ -755,6 +759,8 @@ The code computes the first two factors as `blocking_from_theta`, and `blocking_
 ![Poisoning curve and site-blocking decomposition](figures/fig_poisoning_curve.png)
 
 *Figure 6. Toy model with the surface reaction switched off, so the impurity can only block sites. (a) The impurity takes over the surface, partly as a two-site species. (b) This raises the site-count factor $f$. (c) The poisoning factor computed from rates (circles) follows the full site-blocking prediction exactly; the coverage-only prediction (dashed) misses where two-site species are abundant.*
+
+**On real data** (`site_blocking.png`, drawn by the poisoning curves of Stage 11.1). Figure 6 for the run: at one point (`curves['blocking_point']`, default the first series point), one row per impurity that changes the rate or takes sites there: (a) empty sites and impurity-held sites, (b) $f$, (c) $\Pi$ from rates against the full prediction (`blocking_full`) and the coverage-only one (`blocking_from_theta`).
 
 **Interpreting the columns.**
 - For an elementary step, impurities change the forward rate *only* through empty sites (and $f$). The substantive question is therefore which species take the sites, answered in Stage 8. A `blocking_check` different from 1 would point to coverage-dependent parameters, an indexing error, or a probe reaction that is not elementary.
@@ -878,7 +884,8 @@ Report the results with their caveats listed; or run what-if sensitivity tests t
 | Analysis | Name in `analyses` | Solves | Reuses |
 |---|---|---|---|
 | 11.1 Poisoning curves | `curves` | impurities × levels × T, + 1 reference per T | `run_conditions` (two starts, cache) |
-| 11.2 Temperature sweep | `sweep` | (1 + impurities) × T | `run_conditions` |
+| 11.2 Temperature sweep | `sweep` | (2 + impurities) × T: reference, each impurity, the mixture | `run_conditions` |
+| 11.2b Pressure sweep | `pressure_sweep` | (2 + impurities) × p × T | `run_conditions` |
 | 11.3 Reaction orders | `orders` | 3 per probe-gas-only case, 5 per impurity case, per T | `run_conditions` |
 | 11.4 Degree of rate control | `rate_control` | 2 per screened reaction and per screened species, per case | `run_jobs` (one start, cache) |
 | 11.5 Reaction path diagrams | `paths` | none | main results, `common.load_state` |
@@ -924,6 +931,16 @@ $$E_{\mathrm{app}}(T) = -R\,\frac{\partial\ln\mathrm{TOF}}{\partial(1/T)} ;$$
 
 **What covers the surface against temperature** (`sweep_coverages.png`): one panel per case, one stacked bar per solved temperature, with the species colors of Stage 8. Bars rather than areas, because every temperature is a separate solve: an isolated converged point still shows, and a temperature without a steady state is a visible gap. This is the figure that explains the rate curves, for example which adsorbate holds the sites up to which temperature.
 
+### 11.2b Pressure sweep
+
+**What it does.** The pressure counterpart of 11.2: at each temperature of `pressure_sweep['temperatures']` (default `pressure_temperatures`), the probe-gas pressure runs over a log grid (default `per_decade` = 2 points per decade spanning the pressure series, or two decades either side of `reference_pressure` without one), for the reference, each impurity and the mixture. Every impurity keeps its ratio to the probe gas (`impurity_ratio`, one number or one per impurity), so the gas has the same purity at every pressure. It reports:
+- the forward probe TOF against $p_{A_2}$ (log–log);
+- the **local slope** $\partial\ln\mathrm{TOF}/\partial\ln p$ by central differences. For the reference case this is the order in the probe gas over the whole range, not just at one point (11.3). For impurity cases every partial pressure moves together, so it is the order in the total pressure at fixed purity;
+- the poisoning factor against pressure, and the **half-rate pressure**: the first pressure, going up, at which $\Pi$ crosses 0.5, with the direction (`recovers above half` or `falls below half`) in `half_rate_pressure.csv`;
+- what covers the surface against pressure (`pressure_sweep_coverages_<T>K.png`).
+
+**Interpretation for a two-site probe step.** With the probe adsorbate filling the surface, $	heta_st \propto p_{A_2}^{-1/2}$ and the slope falls towards 0 as $p$ rises; with a strongly bound impurity at fixed purity, $	heta_st \propto 1/p_I \propto 1/p$, and the slope tends to $-1$. Code: `analyses/pressure_sweep.py`.
+
 ### 11.3 Reaction orders
 
 **What it does.** For each case, scales one partial pressure at a time by $(1\pm\delta)$ (default $\delta$ = 0.10), with the others fixed, and computes
@@ -937,7 +954,7 @@ for the probe gas and, in impurity cases, for the impurity.
 - order ≈ −2 in the impurity and ≈ +1 in the probe gas when the impurity controls the empty sites ($\theta_\ast \propto 1/p_I$, squared): the signature of a strongly adsorbed poison;
 - values in between when both share the surface.
 
-**Figure.** The orders are drawn in the bottom panels of `rate_control_vs_T.png` / `_vs_P.png` (Stage 11.4), one marker per case and pressure (● probe gas, ■ impurity), labeled where $|n_j| \ge 0.1$.
+**Figure.** The orders are drawn in the bottom panel of each `rate_control_<T>K_<P>bar.png` (Stage 11.4), one marker per case and pressure (● probe gas, ■ impurity), labeled where $|n_j| \ge 0.1$.
 
 **Details.** The step must be large enough that the rate change exceeds the solver's tolerance on the TOF ($\varepsilon_{\mathrm{TOF}} = 10^{-4}$ for the reactor method): with $\delta$ = 0.1 the logarithmic span is 0.2, so the error in $n_j$ is about $10^{-3}$. The flag `all_starts_agree` is True only if every perturbed point agreed between its two starts.
 
@@ -976,7 +993,7 @@ Together these give exactly the intended changes. For reactions with $n$ as a re
 
 So every perturbed solve starts from a **clean surface with the normal method choice**, exactly like its base solve. This is slower, but correct: from a clean start the plateau test only passes once the slow species have settled.
 
-**Figure** (`rate_control_vs_T.png` / `_vs_P.png`, "what controls the rate"): top, the TRC of the forward probe rate, one panel per (point, case), species with $|X_{\mathrm{TRC}}| \ge 0.01$, with the sum in the axis label; bottom, the reaction orders of Stage 11.3 at the same points, if that analysis ran (in the same session, or earlier: then its `reaction_orders.csv` is used). For a probe step that needs $n$ empty sites, with adsorbates in equilibrium with the gas, $X_{\mathrm{TRC},i} \approx -n\,\theta_i$, so the values add up to about $-n(1-\theta_\ast)$: whichever species holds the sites controls the rate, in proportion to how many it holds. DRC is not drawn: it is reported in the table, and usually sits entirely on the probe step.
+**Figure** (`rate_control_<T>K_<P>bar.png`, one per point, "what controls the rate"): top, the TRC of the forward probe rate, one panel per case (wrapped at four per row), species with $|X_{\mathrm{TRC}}| \ge 0.01$, with the sum in the axis label; bottom, the reaction orders of Stage 11.3 at the same points, if that analysis ran (in the same session, or earlier: then its `reaction_orders.csv` is used). For a probe step that needs $n$ empty sites, with adsorbates in equilibrium with the gas, $X_{\mathrm{TRC},i} \approx -n\,\theta_i$, so the values add up to about $-n(1-\theta_\ast)$: whichever species holds the sites controls the rate, in proportion to how many it holds. Below it, only where it is not trivial, the DRC: of the forward rate (blue) and of the net probe-gas consumption (orange), for the six reactions with the largest values, labeled `#<reaction index>: equation` with readable species names. Trivial means no defined net DRC (near equilibrium) and a forward DRC of 1 on one step and about 0 elsewhere, the usual case at low temperature. Where the net DRC is drawn its values add up to 1, as in Figure 7b.
 
 **Code.** `analyses/rate_control.py`: `drc_reactions`, `trc_species`, `trc_multipliers`, `plot_rate_control`, `run`. Each perturbed solve is a job with its own `multipliers` and `h_shifts`, which are part of its cache fingerprint (`output/cache_sensitivity/`).
 
@@ -1045,9 +1062,11 @@ bash run.sh runs/ni_first_try                          # every analysis listed i
 bash run.sh runs/ni_first_try --only curves,sweep      # a subset (always run in the fixed order below)
 bash run.sh runs/ni_first_try --workers 4 --recompute  # fewer processes; ignore the cache
 bash run.sh runs/ni_first_try status                   # what is cached and saved
+bash run.sh runs/try_2/Cu runs/try_2/Fe runs/try_2/Ni  # several runs, one after another
+bash run.sh runs/try_*/Ni/settings.py check            # a folder or its settings.py; globs work
 ```
 
-`run.sh` keeps the Mac awake (`caffeinate -dims`), sets one thread per worker, uses the `rmg4.0` Python (or `$PYTHON`), and appends everything to `runs/<name>/run.log` with start and end times and the exit status. Under the hood it calls `python -m hydrogen_surface_kinetics check|run|status <settings.py>`, which works without `run.sh` too.
+`run.sh` keeps the Mac awake (`caffeinate -dims`), sets one thread per worker, uses the `rmg4.0` Python (or `$PYTHON`), and appends everything to `runs/<name>/run.log` with start and end times and the exit status. With several runs, they go one after another, each to its own `run.log`; the options after `check`/`status` apply to all of them. Every path is looked up before the first run starts, so a typo fails at once rather than hours in. A failed run does not stop the rest, a summary at the end lists the failures, and the exit status is that of the last failed run. Ctrl-C stops the whole batch. Under the hood it calls `python -m hydrogen_surface_kinetics check|run|status <settings.py>`, which works without `run.sh` too.
 
 **From a notebook** (`notebooks/analyze.ipynb` is a ready-made front end):
 
@@ -1063,7 +1082,7 @@ ctx.outputs['curves']['tolerance']                     # every table is a DataFr
 
 The command line and the notebook share the cache: whatever one solved, the other loads.
 
-**Which analyses.** `analyses = [...]` in `settings.py` chooses them; `--only` (command line) or `only=` (Python) overrides that list for one run. They always run in this order: `steady_state`, `composition`, `diagnostics`, `curves`, `sweep`, `orders`, `rate_control`, `paths`, `transients`, `flux`. `flux` (Stage 2) needs RMG-Py and is not run unless named.
+**Which analyses.** `analyses = [...]` in `settings.py` chooses them; `--only` (command line) or `only=` (Python) overrides that list for one run. They always run in this order: `steady_state`, `composition`, `diagnostics`, `convergence`, `curves`, `sweep`, `pressure_sweep`, `orders`, `rate_control`, `paths`, `transients`, `flux`. `flux` (Stage 2) needs RMG-Py and is not run unless named.
 
 **How long.** `check` lists, for every chosen analysis, the number of points and solves and how many are already cached, before anything runs (exact for the main conditions, curves, sweep and orders; an estimate for rate control and transients, whose job lists depend on solved states). Rate control dominates: about 50 solves per case and point. For the 196-species Ni mechanism on 8 workers, the full list (without `flux`) took about 2 hours from scratch: main steady states 10 min, curves 20 min, sweep 45 min, orders 10 min, rate control 25 min, the rest a few minutes. Rerunning from the cache takes a few minutes, mostly for recomputing rates from the stored coverages. `flux` takes about 2 minutes per reactor at `n_points = 12`, longer at the default 100.
 
@@ -1166,7 +1185,8 @@ All code is in the package folder `hydrogen_surface_kinetics/`.
 | `analyses/steady_state.py` | main steady states, summary table, rate plot | 7, 9 |
 | `analyses/composition.py` | coverage tables and the surface-composition plot | 8 |
 | `analyses/diagnostics.py` | binding check, switch-off what-if, top reactions | 10 |
-| `analyses/curves.py`, `sweep.py`, `orders.py`, `rate_control.py`, `paths.py`, `transients.py` | the further analyses | 11.1–11.6 |
+| `analyses/convergence.py` | reactor-method traces with the accepted checkpoint (Figure 4 on real data) | 4 |
+| `analyses/curves.py`, `sweep.py`, `pressure_sweep.py`, `orders.py`, `rate_control.py`, `paths.py`, `transients.py` | the further analyses | 11.1–11.6 |
 | `analyses/flux.py` | flux-diagram videos of the RMG reactors (optional, needs RMG-Py) | 2 |
 | `analyses/__init__.py` | `run()`: runs the chosen analyses in order | all |
 | `analyses/plan.py` | solves per analysis and how many are cached, for `check` | all |
@@ -1176,7 +1196,7 @@ Around the package:
 
 | File | Role |
 |---|---|
-| `run.sh` | runs one run folder: keeps the Mac awake, one thread per worker, logs to `run.log` |
+| `run.sh` | runs one or more run folders in turn: keeps the Mac awake, one thread per worker, logs to each folder's `run.log` |
 | `runs/<name>/settings.py` | one run's settings (next to the run's RMG files, if any); its outputs go to `runs/<name>/output/` |
 | `notebooks/analyze.ipynb` | notebook front end: one section per analysis, settings editable per cell |
 | `tests/` | `pytest` suite on the toy mechanism (`tests/data/toy_mechanism.yaml`) |
@@ -1270,7 +1290,7 @@ Every setting of `settings.py`, with its default (from `config.py`). Dictionary 
 | `reference_pressure` | $10^{5}$ Pa | 3 | probe-gas partial pressure of the temperature series (total pressure on the `input_X` basis) |
 | `pressures` | `[]` | 3 | pressure series, Pa (probe-gas partial pressure); `[]` = none |
 | `pressure_temperatures` | `None` (the lowest temperature) | 3 | a pressure series at each of these temperatures, K |
-| `impurity_ratio` | 0.25 | 3 | $r = p_I/p_{A_2}$, the same in both series |
+| `impurity_ratio` | 0.25 | 3 | $r = p_I/p_{A_2}$, the same in both series: one number, or `{impurity label: r}` with every impurity (e.g. an RMG reactor's proportions) |
 | `mixture_mode` | `'same_each'` | 3 | each impurity at $r$ in the mixture, or `'split'` ($r/N_I$) |
 | `include_input_basis` | False | 3 | also compute the mole-fraction basis |
 | `input_basis` | single 0.8/0.2; mixture 0.75 + 0.05 each | 3 | mole fractions of the `input_X` basis |
@@ -1307,7 +1327,7 @@ Every setting of `settings.py`, with its default (from `config.py`). Dictionary 
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `analyses` | `['steady_state']` | any of `steady_state`, `composition`, `diagnostics`, `curves`, `sweep`, `orders`, `rate_control`, `paths`, `transients`, `flux` |
+| `analyses` | `['steady_state']` | any of `steady_state`, `composition`, `diagnostics`, `convergence`, `curves`, `sweep`, `pressure_sweep`, `orders`, `rate_control`, `paths`, `transients`, `flux` |
 | `plot_style` | `'screen'` | `'screen'` (bold, 300 dpi PNG) or `'publication'` (7 pt, PDF + 600 dpi PNG) |
 | `publication_width_cm` | 17.8 | 17.8 double column, 8.5 single column; tall figures are capped at 22 cm high |
 
@@ -1317,8 +1337,10 @@ Every setting of `settings.py`, with its default (from `config.py`). Dictionary 
 |---|---|---|
 | `composition` | `min_listed` ($10^{-3}$), `min_plotted` (0.02), `max_named` (7) | 8 |
 | `diagnostics` | `adsorption_checks` (`[]`: tuples of label, reactants, products, (lit. ΔH low, high) kJ/mol, note), `switch_off` (None = the molecular adsorbate), `switch_off_cases` (None = every case), `top_reactions` (`[]`: (case, T, species) or (case, T, P, species)), `top_n` (5) | 10 |
-| `curves` | `ratios` ($10^{-6}$ … 0.25, 12 levels), `impurities`, the series keys | 11.1 |
-| `sweep` | `temperatures` (None = main range in `step` K), `step` (50), `ratio`, `impurities`; always at `reference_pressure` | 11.2 |
+| `convergence` | `conditions` (`(case, T)` or `(case, T, P)`; None = the main conditions whose clean start did not converge, else the reference at the first point), `max_conditions` (6), `per_decade` (2) | 4 |
+| `curves` | `ratios` ($10^{-6}$ … 0.25, 12 levels), `impurities`, `blocking_point` (`(T, P)` of the site-blocking figure; None = the first point), the series keys | 11.1 |
+| `sweep` | `temperatures` (None = main range in `step` K), `step` (50), `ratio`, `impurities` (None = every impurity and the mixture); always at `reference_pressure` | 11.2 |
+| `pressure_sweep` | `pressures` (Pa; None = a log grid over the pressure series), `per_decade` (2), `temperatures` (None = `pressure_temperatures`), `ratio`, `impurities` | 11.2b |
 | `orders` | `ratio`, `delta` (0.10), `impurities`, the series keys | 11.3 |
 | `rate_control` | `cases` (None = reference + every impurity), the series keys, `ratio`, `drc_delta` (0.05), `drc_top_n` (20), `trc_delta` ($10^{6}$ J/kmol), `trc_min_coverage` ($10^{-3}$) | 11.4 |
 | `paths` | `conditions` (`(case, T)` or `(case, T, P)`; None = every case at every series point), `elements` (None = the probe gas's), `threshold` ($10^{-8}$), `flow_type` (`'OneWayFlow'`), `formats` (`['png']`) | 11.5 |
@@ -1349,7 +1371,8 @@ All files are in the run's `output/` folder. With `plot_style = 'publication'`, 
 | `starts_agree` | True, False or None (Stage 5) |
 | `residual_1_per_s` | residual of the species closest to its limit, start A |
 | `poisoning_factor`, `slowdown_x` | $\Pi$ and $1/\Pi$ |
-| `blocking_from_theta`, `blocking_check` | site-blocking prediction from coverages; $\Pi$ divided by the full prediction |
+| `blocking_from_theta`, `blocking_full`, `blocking_check` | site-blocking prediction from coverages only; with the site-count factor; $\Pi$ divided by the full prediction |
+| `tof_fwd_B`, `poisoning_factor_B`, `theta_free_B`, `theta_impurity_B` | the same at start B's steady state (Stage 5), where it converged |
 
 **`steady_state_coverages.csv`** (Stage 8): rows (basis, series, T_K, P_ref_bar, case); one column per surface species with non-zero coverage anywhere.
 
@@ -1366,14 +1389,17 @@ All files are in the run's `output/` folder. With `plot_style = 'publication'`, 
 **`top_reactions.csv`** (Stage 10.3): `case`, `T_K`, `P_ref_bar`, `species`, `label`, `coverage`, `rate_1_per_s` (positive: makes the species), `reaction`, `equation`, `source` (the provenance line of the YAML note).
 
 **Stage 11**:
+- `convergence.csv`, `convergence.png` (Stage 4): one row per checkpoint and condition: `t_s`, `tof_fwd`, `norm_residual`, `worst_species`, `residual_ok`, `plateau_ok`, `accepted_here`, `accepted_s`, `error`.
+- `site_blocking.png` (Stage 7, drawn with 11.1).
 - `poisoning_curves.csv`, `poisoning_curves_vs_T/_vs_P.png` (11.1): one row per (point, case, level) with the Stage 7 columns and `ratio`; `poisoning_tolerance.csv`: `ratio_at_half_rate`, `ppm_of_probe` and `note` per (point, impurity).
 - `temperature_sweep.csv`, `temperature_sweep.png` (11.2): the same per (case, T), plus `E_app_kJ_per_mol`; `release_temperature.csv`: `release_T_K` and `note` per impurity; `sweep_coverages.png`: what covers the surface against temperature.
+- `pressure_sweep.csv`, `pressure_sweep.png` (11.2b): per (case, T, p), plus `slope_dlnTOF_dlnp`; `half_rate_pressure.csv`: `half_rate_P_bar`, `direction` and `note` per (T, impurity); `pressure_sweep_coverages_<T>K.png`.
 - `reaction_orders.csv` (11.3): `series`, `T_K`, `P_ref_bar`, `case`, `tof_fwd_base`, `order_probe`, `order_impurity`, `all_starts_agree`.
-- `rate_control_vs_T/_vs_P.png` (11.3–11.4): TRC per case and point, and the reaction orders.
+- `rate_control_<T>K_<P>bar.png` (11.3–11.4), one per point: TRC per case, the DRC where it is not trivial, and the reaction orders.
 - `sensitivity.csv` (11.4): `kind` (DRC or TRC), `series`, `T_K`, `P_ref_bar`, `case`, `item` (reaction index or species), `label`, `X_tof_fwd`, `X_probe_consumed`, `methods` (solver used for the + and − perturbations).
 - `reaction_paths/path_<element>_<case>_<T>K_<P>bar_<flow>.dot` and `.png` (11.5).
 - `poisoning_over_time.csv` (11.6): `series`, `T_K`, `P_ref_bar`, `case`, `ratio`, `tof_t0`, `tof_end`, `end_over_t0`, `min_over_t0`, `t_min_s`, `t_end_s`, `t_half_s`, `t_tenth_s`, `t_settle_s`, `gas_drift`, `top_species_end`, `error`; `poisoning_over_time_trajectories.csv`: every recorded time point; `poisoning_over_time_vs_T/_vs_P.png`.
-- `cache_diagnostics/`, `cache_sensitivity/`, `cache_transients/`: one `.pkl` per job (10.2, 11.4, 11.6).
+- `cache_diagnostics/`, `cache_convergence/`, `cache_sensitivity/`, `cache_transients/`: one `.pkl` per job (10.2, Stage 4 traces, 11.4, 11.6).
 
 **`cache/*.pkl`** (Stage 6; main conditions and 11.1–11.3): one dictionary per condition with
 - `status` (`done`, `error` or `timeout`), `job` (its `key`, `row` (the condition's physics) and `_labels` (`P_ref_bar`, `series`)), `wall_seconds`;

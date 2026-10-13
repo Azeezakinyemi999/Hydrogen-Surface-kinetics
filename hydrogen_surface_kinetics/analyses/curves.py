@@ -2,8 +2,12 @@
 
 At every point of the temperature and pressure series, the probe-gas pressure stays at the
 point's value and each impurity is added at a ratio p(imp)/p(probe).
+Where the two starting surfaces reach different steady states, the figures draw the start-B
+branch too (dashed) and shade the window: the two-steady-state picture of Stage 5.
+site_blocking.png splits the poisoning factor into its coverage and site-count parts
+(Stage 7) at one point.
 Outputs: poisoning_curves.csv, poisoning_tolerance.csv, poisoning_curves_vs_T.png and,
-with a pressure series, poisoning_curves_vs_P.png.
+with a pressure series, poisoning_curves_vs_P.png; site_blocking.png.
 """
 import matplotlib.pyplot as plt
 import numpy as np
@@ -64,6 +68,10 @@ def run(ctx):
         if fig is not None:
             P.save(fig, ctx.path(common.series_file('poisoning_curves', series)), cfg)
             plt.close(fig)
+    fig = plot_site_blocking(ctx, df)
+    if fig is not None:
+        P.save(fig, ctx.path('site_blocking.png'), cfg)
+        plt.close(fig)
     ctx.outputs['curves'] = {'results': results, 'curves': df, 'tolerance': tol}
     return ctx.outputs['curves']
 
@@ -92,6 +100,14 @@ def plot_poisoning_curves(ctx, curves, tolerance=None, series='temperature'):
                 y = P.log_floor(d[col]) if col == 'theta_impurity' else d[col].to_numpy()
                 ax.plot(d['ratio'], y, '-o', color=colors[imp], ms=4.5, lw=1.6, label=imp)
                 ax.plot(d['ratio'].to_numpy()[two], y[two], 'o', ms=9, mfc='none', mec=P.INK, mew=1.2)
+                col_b = col + '_B' if col == 'theta_impurity' else 'poisoning_factor_B'
+                if two.any() and col_b in d:                  # the covered start's branch, and the window
+                    yb = d[col_b].to_numpy(dtype=float)
+                    yb = P.log_floor(yb) if col == 'theta_impurity' else yb
+                    ax.plot(d['ratio'], yb, '--', color=colors[imp], lw=1.4)
+                    ax.plot(d['ratio'].to_numpy()[two], yb[two], 's', color=colors[imp], ms=4.5, mfc='white')
+                    r2 = d['ratio'].to_numpy()[two]
+                    ax.axvspan(r2.min() / 1.3, r2.max() * 1.3, color=colors[imp], alpha=0.10, lw=0, zorder=0)
             if tolerance is not None:                     # interpolated half-rate level (not the bounds)
                 t = tolerance[(tolerance['T_K'] == T) & (tolerance['P_ref_bar'] == Pb) & (tolerance['case'] == imp)
                               & (tolerance['note'].fillna('') == '')]
@@ -112,6 +128,58 @@ def plot_poisoning_curves(ctx, curves, tolerance=None, series='temperature'):
         labels.append('half-rate level')
     handles.append(P.two_states_handle())
     labels.append('two steady states (starts disagree)')
+    disagree = sub['starts_agree'] == False                         # noqa: E712
+    if 'poisoning_factor_B' in sub and (disagree & sub['poisoning_factor_B'].notna()).any():
+        handles.append(plt.Line2D([], [], ls='--', color=P.INK, marker='s', ms=4.5, mfc='white'))
+        labels.append('covered start (start B)')
     fig.legend(handles, labels, loc='upper center', bbox_to_anchor=(0.5, 1.03), ncol=len(labels), frameon=False, fontsize=9)
     fig.tight_layout(rect=(0, 0, 1, 0.96))
+    return fig
+
+
+def blocking_rows(ctx, curves):
+    """Rows of the site-blocking figure: the curves at curves['blocking_point'] (default: the
+    first series point), for the impurities that change the rate or take sites there."""
+    cfg = ctx.cfg
+    bp = cfg.curves['blocking_point']
+    pt = common.points(ctx, 'curves')[0] if bp is None else {'T': float(bp[0]), 'P': float(bp[1])}
+    at = curves[(curves['T_K'] == pt['T']) & np.isclose(curves['P_ref_bar'].astype(float), pt['P'] / 1e5)
+                & curves['converged'].astype(bool) & (curves['case'] != cfg.reference_label)]
+    shown = [imp for imp in common.impurity_labels(ctx, 'curves')
+             if len(g := at[at['case'] == imp]) and (g['poisoning_factor'].min() < 0.99 or g['theta_impurity'].max() > 0.01)]
+    return pt, at, shown or [imp for imp in common.impurity_labels(ctx, 'curves') if (at['case'] == imp).any()]
+
+
+def plot_site_blocking(ctx, curves):
+    """Stage 7 on real data, one row per impurity at one point: (a) empty sites and sites the
+    impurity takes, (b) the site-count factor f, (c) the poisoning factor from rates (markers)
+    against the full site-blocking prediction (line) and the coverage-only one (dashed)."""
+    probe = probe_label(ctx.model)
+    pt, at, shown = blocking_rows(ctx, curves)
+    if not shown:
+        return None
+    colors = P.colors_for(common.impurity_labels(ctx, 'curves'))
+    fig, axes = plt.subplots(len(shown), 3, figsize=(13, 3.2 * len(shown)), squeeze=False)
+    for row, imp in zip(axes, shown):
+        d = at[at['case'] == imp].sort_values('ratio')
+        c = colors[imp]
+        row[0].plot(d['ratio'], P.log_floor(d['theta_free']), '-o', color=P.MUTED, ms=4, lw=1.4, label='empty sites')
+        row[0].plot(d['ratio'], P.log_floor(d['theta_impurity']), '-o', color=c, ms=4, lw=1.6, label='impurity-held')
+        row[0].set_yscale('log')
+        row[0].legend(loc='best', frameon=False, fontsize=8)
+        row[1].plot(d['ratio'], d['site_count_factor'], '-o', color=c, ms=4, lw=1.6)
+        row[1].axhline(1.0, color=P.MUTED, lw=0.8, ls='--')
+        row[2].plot(d['ratio'], d['blocking_full'], '-', color=c, lw=1.6, label='site blocking, with f')
+        row[2].plot(d['ratio'], d['blocking_from_theta'], '--', color=c, lw=1.4, label='coverages only')
+        row[2].plot(d['ratio'], d['poisoning_factor'], 'o', color=c, ms=5, mec='white', mew=0.6, label='from rates')
+        row[2].set_yscale('log')
+        row[2].legend(loc='lower left', frameon=False, fontsize=8)
+        for ax, desc, ylabel in zip(row, ('sites', 'site-count factor', 'poisoning factor'),
+                                    ('fraction of sites', 'f = sum(sigma C) / Gamma', 'TOF / TOF(reference)')):
+            ax.set_xscale('log')
+            ax.set_xlabel(f'impurity level  p(impurity) / p({probe})')
+            P.style_axis(ax, ylabel=ylabel)
+            P.keep_title(ax, f"{imp}, {pt['T']:.0f} K, {pt['P'] / 1e5:g} bar: {desc}")
+    fig.suptitle('Site blocking: does the poisoning come from lost sites?', x=0.01, ha='left', fontsize=11)
+    fig.tight_layout(rect=(0, 0, 1, 0.97))
     return fig

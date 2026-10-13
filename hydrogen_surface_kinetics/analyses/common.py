@@ -160,6 +160,25 @@ def evaluate(model, row, theta):
     return out
 
 
+def role_coverages(model, theta):
+    """(empty sites, probe adsorbate, molecular adsorbate, everything else) of a coverage array."""
+    names = model.species_names
+    free = theta[names.index(model.site)]
+    probe = theta[names.index(model.probe_adsorbate)]
+    molec = theta[names.index(model.molecular_adsorbate)] if model.molecular_adsorbate else 0.0
+    return free, probe, molec, max(0.0, 1.0 - free - probe - molec)
+
+
+def sweep_cases(ctx, section):
+    """Reference + the section's impurities + the all-impurities mixture (when the section
+    uses every impurity and there is a mixture case)."""
+    cfg = ctx.cfg
+    cases = [cfg.reference_label] + impurity_labels(ctx, section)
+    if cfg[section].get('impurities') is None and cfg.mixture_label and len(cfg.impurities) > 1:
+        cases.append(cfg.mixture_label)
+    return cases
+
+
 def top_species(model, theta, n=3):
     order = np.argsort(-np.asarray(theta))[:n]
     return ', '.join(f'{model.species_names[i]} {theta[i]:.3f}' for i in order)
@@ -181,6 +200,10 @@ def results_frame(ctx, results, extra_cols=()):
         ok = converged(res)
         if ok:
             out.update(evaluate(ctx.model, r, res['theta_a']))
+            info_b = res.get('info_b') or {}
+            if info_b.get('converged') and res.get('theta_b') is not None:     # start B's steady state
+                free, _, _, imp = role_coverages(ctx.model, res['theta_b'])
+                out.update({'tof_fwd_B': info_b['tof_fwd_1_per_s'], 'theta_free_B': free, 'theta_impurity_B': imp})
         out.update({'converged': ok, 'starts_agree': res.get('starts_agree'),
                     'start_A_solved_by': res['info_a']['method'] if res.get('status') == 'done' else res.get('status'),
                     'start_B_solved_by': (res.get('info_b') or {}).get('method', res.get('status')),
@@ -200,9 +223,11 @@ def add_poisoning(df, ref_case, n_sites, by=('basis', 'T_K', 'P_ref_bar')):
     df = df.join(ref, on=by)
     df['poisoning_factor'] = df['tof_fwd'] / df['tof_fwd_ref']
     df['slowdown_x'] = 1.0 / df['poisoning_factor']
+    if 'tof_fwd_B' in df:
+        df['poisoning_factor_B'] = df['tof_fwd_B'] / df['tof_fwd_ref']
     df['blocking_from_theta'] = (df['theta_free'] / df['theta_free_ref']) ** n_sites * df['P_probe_bar'] / df['P_probe_bar_ref']
-    df['blocking_check'] = df['poisoning_factor'] / (
-        df['blocking_from_theta'] * (df['site_count_factor'] / df['site_count_factor_ref']) ** n_sites)
+    df['blocking_full'] = df['blocking_from_theta'] * (df['site_count_factor'] / df['site_count_factor_ref']) ** n_sites
+    df['blocking_check'] = df['poisoning_factor'] / df['blocking_full']
     return df.drop(columns=[c + '_ref' for c in cols])
 
 
