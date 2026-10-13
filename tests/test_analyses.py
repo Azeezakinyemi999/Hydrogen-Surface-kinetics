@@ -11,7 +11,7 @@ import hydrogen_surface_kinetics as hsk
 from hydrogen_surface_kinetics import analyses
 from hydrogen_surface_kinetics.cli import main as cli_main
 
-from conftest import TOY_INPUT, write_input
+from conftest import TOY_SETTINGS, write_settings
 
 SMALL = """
 analyses = ['steady_state', 'composition', 'diagnostics', 'curves', 'sweep', 'orders',
@@ -28,7 +28,7 @@ transients = {'ratios': [1e-5, 1e-3], 't_start': 1e-6, 't_stop': 1e2, 'per_decad
 
 @pytest.fixture(scope='module')
 def ctx(tmp_path_factory):
-    path = write_input(tmp_path_factory.mktemp('toy'), TOY_INPUT, SMALL)
+    path = write_settings(tmp_path_factory.mktemp('toy'), TOY_SETTINGS, SMALL)
     return analyses.run(path, log=lambda *a: None)
 
 
@@ -86,15 +86,15 @@ def test_rerun_loads_cache(ctx):
 
 
 def test_cli(ctx, capsys):
-    assert cli_main(['check', ctx.cfg.input_file]) == 0
-    assert cli_main(['status', ctx.cfg.input_file]) == 0
+    assert cli_main(['check', ctx.cfg.settings_file]) == 0
+    assert cli_main(['status', ctx.cfg.settings_file]) == 0
     assert 'cached results' in capsys.readouterr().out
-    assert cli_main(['run', ctx.cfg.input_file, '--only', 'nonsense']) == 2
+    assert cli_main(['run', ctx.cfg.settings_file, '--only', 'nonsense']) == 2
 
 
 def test_unknown_analysis(tmp_path):
     with pytest.raises(hsk.ConfigError, match='unknown analyses'):
-        hsk.load_config(write_input(tmp_path, TOY_INPUT, "analyses = ['steady', 'sweep']\n"))
+        hsk.load_config(write_settings(tmp_path, TOY_SETTINGS, "analyses = ['steady', 'sweep']\n"))
 
 
 def test_species_colors_follow_the_species(ctx):

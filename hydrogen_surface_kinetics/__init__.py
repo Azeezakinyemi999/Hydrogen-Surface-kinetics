@@ -3,7 +3,7 @@
 Typical use:
 
     import hydrogen_surface_kinetics as hsk
-    cfg = hsk.load_config('runs/my_run/input.py')
+    cfg = hsk.load_config('runs/my_run/settings.py')
     model = hsk.Model(cfg)
 """
 import os as _os

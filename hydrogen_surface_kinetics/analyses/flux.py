@@ -36,6 +36,22 @@ def _path(ctx, p):
     return p if os.path.isabs(p) else os.path.normpath(os.path.join(ctx.cfg.run_dir, p))
 
 
+def default_rmg_files(ctx):
+    """The RMG input.py and seed folder: from the flux section, or else the ones next to
+    settings.py (input.py; seed/seed or seed, whichever holds reactions.py)."""
+    s, run_dir = ctx.cfg.flux, ctx.cfg.run_dir
+    rmg_input = _path(ctx, s['rmg_input'])
+    if rmg_input is None and os.path.exists(os.path.join(run_dir, 'input.py')):
+        rmg_input = os.path.join(run_dir, 'input.py')
+    seed_dir = _path(ctx, s['seed_dir'])
+    if seed_dir is None:
+        for cand in ('seed/seed', 'seed'):
+            if os.path.exists(os.path.join(run_dir, cand, 'reactions.py')):
+                seed_dir = os.path.join(run_dir, cand)
+                break
+    return rmg_input, seed_dir
+
+
 def import_rmg(rmg_path):
     """Import the RMG-Py pieces used here; a clear message if they are missing."""
     if rmg_path and rmg_path not in sys.path:
@@ -219,14 +235,14 @@ def bake_condition_label(folder, label):
 def run(ctx):
     s, cfg, log = ctx.cfg.flux, ctx.cfg, ctx.log
     log('\n== flux: flux-diagram videos of the RMG reactors ==')
-    missing = [k for k in ('rmg_input', 'seed_dir') if not s[k]]
+    rmg_input, seed_dir = default_rmg_files(ctx)
+    missing = [k for k, v in (('rmg_input', rmg_input), ('seed_dir', seed_dir)) if not v]
     if missing:
-        raise ValueError(f"flux: set {missing} in the flux section of the input file")
+        raise ValueError(f"flux: set {missing} in the flux section of settings.py (no RMG files found next to it)")
     tools = [t for t in ('dot', 'ffmpeg') if not shutil.which(t)]
     if tools:
         raise RuntimeError(f'flux: {tools} not found on PATH')
     rmg = import_rmg(_path(ctx, s['rmg_path']))
-    rmg_input, seed_dir = _path(ctx, s['rmg_input']), _path(ctx, s['seed_dir'])
     species_dir = _path(ctx, s['species_dir']) or ctx.path('flux_species', '')
     out_root = ctx.path('flux', '')
 

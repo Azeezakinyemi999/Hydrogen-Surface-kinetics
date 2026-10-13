@@ -1,11 +1,13 @@
-"""Load and check a run's input.py.
+"""Load and check a run's settings.py.
 
-An input file is plain Python: top-level variables become settings. Anything left out
+A settings file is plain Python: top-level variables become settings. Anything left out
 takes the default below. Dictionary-valued sections (``solver``, ``run``, and one per
-analysis) are merged key by key, so an input file only lists what it changes.
+analysis) are merged key by key, so a settings file only lists what it changes.
+It is called settings.py so that it can sit next to the RMG input.py of the same run.
 """
 import copy
 import os
+import re
 import runpy
 import types
 
@@ -84,11 +86,11 @@ ANALYSIS_DEFAULTS = dict(
         t_start=1e-9, t_stop=1e8, per_decade=4,   # s: recording times
     ),
     # Optional, needs RMG-Py (+ RDKit, Graphviz, ffmpeg): flux-diagram videos of the RMG
-    # input file's own batch reactors. Paths are relative to this input file.
+    # input file's own batch reactors. Paths are relative to settings.py.
     flux=dict(
         rmg_path=None,              # RMG-Py source folder, if rmgpy is not importable already
-        rmg_input=None,             # the RMG input.py with the surfaceReactor blocks (required)
-        seed_dir=None,              # seed mechanism folder with reactions.py + dictionary.txt (required)
+        rmg_input=None,             # the RMG input.py with the surfaceReactor blocks; None = input.py next to settings.py
+        seed_dir=None,              # folder with the seed reactions.py + dictionary.txt; None = seed/seed or seed next to settings.py
         species_dir=None,           # structure images (drawn if missing); None = <output>/flux_species
         reactor_indices=None,       # None = every reactor in rmg_input; or e.g. [0, 6, 24]
         n_points=100,               # time points per reactor (~45 for a quick check)
@@ -103,7 +105,7 @@ DEFAULTS = dict(
     mechanism=None,                 # Cantera YAML (required)
     gas_phase='gas',
     surface_phase='surface',
-    output_dir='output',            # relative to the input file
+    output_dir='output',            # relative to settings.py
     expected_site_density=None,     # e.g. (3.148e-9, 'mol/cm2'); None = no check
     # roles (species names in the mechanism)
     probe_gas=None,                 # required, e.g. 'H2(6)'
@@ -174,15 +176,20 @@ def _merge(defaults, values):
 
 
 def load_config(path, **overrides):
-    """Read an input.py, apply defaults and keyword overrides, resolve paths, and check it."""
+    """Read a settings.py, apply defaults and keyword overrides, resolve paths, and check it."""
     path = os.path.abspath(os.path.expanduser(path))
     if not os.path.exists(path):
-        raise ConfigError(f'input file not found: {path}')
+        raise ConfigError(f'settings file not found: {path}')
+    with open(path) as f:
+        text = f.read()
+    if re.search(r'^\s*(database|surfaceReactor|catalystProperties|simulator)\(', text, re.M):
+        raise ConfigError(f'{path} looks like an RMG input file. The package reads the settings.py '
+                          'of a run (see runs/ni_first_try/settings.py)')
     namespace = runpy.run_path(path)
     values = {k: v for k, v in namespace.items()
               if not k.startswith('_') and not isinstance(v, (types.ModuleType, types.FunctionType, type))}
     cfg = Config(_merge(_merge(DEFAULTS, values), overrides))      # overrides merge into sections too
-    cfg['input_file'] = path
+    cfg['settings_file'] = path
     cfg['run_dir'] = os.path.dirname(path)
     for key in PATH_KEYS:
         if cfg.get(key):
@@ -252,4 +259,4 @@ def check_config(cfg):
     if unknown:
         problems.append(f"unknown run settings: {sorted(unknown)}")
     if problems:
-        raise ConfigError(f"problems in {cfg.get('input_file', 'input')}:\n  - " + '\n  - '.join(problems))
+        raise ConfigError(f"problems in {cfg.get('settings_file', 'settings.py')}:\n  - " + '\n  - '.join(problems))

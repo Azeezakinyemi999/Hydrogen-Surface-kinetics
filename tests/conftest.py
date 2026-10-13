@@ -7,7 +7,7 @@ import hydrogen_surface_kinetics as hsk
 
 TOY = os.path.join(os.path.dirname(__file__), 'data', 'toy_mechanism.yaml')
 
-TOY_INPUT = f"""
+TOY_SETTINGS = f"""
 mechanism = {TOY!r}
 expected_site_density = (2.5e-9, 'mol/cm2')
 probe_gas = 'A2'
@@ -21,15 +21,15 @@ run = {{'workers': 2}}
 """
 
 
-def write_input(tmp_path, text=TOY_INPUT, extra=''):
-    path = tmp_path / 'input.py'
+def write_settings(tmp_path, text=TOY_SETTINGS, extra=''):
+    path = tmp_path / 'settings.py'
     path.write_text(textwrap.dedent(text) + textwrap.dedent(extra))
     return str(path)
 
 
 @pytest.fixture
 def toy_cfg(tmp_path):
-    return hsk.load_config(write_input(tmp_path))
+    return hsk.load_config(write_settings(tmp_path))
 
 
 @pytest.fixture

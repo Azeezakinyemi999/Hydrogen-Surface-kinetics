@@ -1,9 +1,9 @@
 """Command line:
 
-    python -m hydrogen_surface_kinetics check  runs/<name>/input.py
-    python -m hydrogen_surface_kinetics run    runs/<name>/input.py [--only a,b] [--workers N]
+    python -m hydrogen_surface_kinetics check  runs/<name>/settings.py
+    python -m hydrogen_surface_kinetics run    runs/<name>/settings.py [--only a,b] [--workers N]
                                                [--timeout S] [--recompute]
-    python -m hydrogen_surface_kinetics status runs/<name>/input.py
+    python -m hydrogen_surface_kinetics status runs/<name>/settings.py
 """
 import argparse
 import glob
@@ -19,14 +19,14 @@ from .model import Model, ModelError                           # noqa: E402
 
 
 def cmd_check(args):
-    cfg = load_config(args.input)
+    cfg = load_config(args.settings)
     model = Model(cfg)
     print(model.summary())
     from .conditions import main_conditions
     conds = main_conditions(model)
     print(f'\n{len(conds)} main conditions:')
     print(conds.drop(columns='X').to_string(index=False))
-    print(f'\nanalyses: {cfg.analyses}\noutput: {cfg.output_dir}\ninput OK')
+    print(f'\nanalyses: {cfg.analyses}\noutput: {cfg.output_dir}\nsettings OK')
 
 
 def cmd_run(args):
@@ -35,13 +35,13 @@ def cmd_run(args):
     bad = [n for n in only or [] if n not in ANALYSIS_ORDER]
     if bad:
         raise ConfigError(f'unknown analyses {bad}; choose from {ANALYSIS_ORDER}')
-    analyses.run(args.input, only=only, workers=args.workers, job_timeout=args.timeout,
+    analyses.run(args.settings, only=only, workers=args.workers, job_timeout=args.timeout,
                  recompute=True if args.recompute else None)
 
 
 def cmd_status(args):
     import pickle
-    cfg = load_config(args.input)
+    cfg = load_config(args.settings)
     out = cfg.output_dir
     if not os.path.isdir(out):
         print(f'no output yet ({out})')
@@ -66,11 +66,11 @@ def main(argv=None):
     p = argparse.ArgumentParser(prog='hydrogen_surface_kinetics', description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest='command', required=True)
-    for name, fn, text in (('check', cmd_check, 'load the input and mechanism, list the conditions'),
+    for name, fn, text in (('check', cmd_check, 'load the settings and mechanism, list the conditions'),
                            ('run', cmd_run, 'run the analyses'),
                            ('status', cmd_status, 'what is cached and saved')):
         sp = sub.add_parser(name, help=text)
-        sp.add_argument('input', help='path to the run input.py')
+        sp.add_argument('settings', help="path to the run's settings.py")
         sp.set_defaults(func=fn)
         if name == 'run':
             sp.add_argument('--only', help=f'comma-separated subset of {",".join(ANALYSIS_ORDER)}')

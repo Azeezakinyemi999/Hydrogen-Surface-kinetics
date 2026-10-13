@@ -8,7 +8,7 @@ import pytest
 import hydrogen_surface_kinetics as hsk
 from hydrogen_surface_kinetics import conditions as C, solver as S, runner as R
 
-from conftest import TOY_INPUT, write_input
+from conftest import TOY_SETTINGS, write_settings
 
 
 # --- config ---------------------------------------------------------------------------
@@ -20,7 +20,7 @@ def test_defaults_and_merge(toy_cfg, tmp_path):
 
 
 def test_config_lists_every_problem(tmp_path):
-    path = write_input(tmp_path, "mechanism = 'nope.yaml'\nsolver = {'abstol': 1}\nmixture_mode = 'x'\n")
+    path = write_settings(tmp_path, "mechanism = 'nope.yaml'\nsolver = {'abstol': 1}\nmixture_mode = 'x'\n")
     with pytest.raises(hsk.ConfigError) as e:
         hsk.load_config(path)
     msg = str(e.value)
@@ -29,9 +29,9 @@ def test_config_lists_every_problem(tmp_path):
 
 
 def test_keyword_overrides(tmp_path):
-    cfg = hsk.load_config(write_input(tmp_path), temperatures=[450, 550], run={'recompute': True})
+    cfg = hsk.load_config(write_settings(tmp_path), temperatures=[450, 550], run={'recompute': True})
     assert cfg.temperatures == [450.0, 550.0]
-    assert cfg.run['recompute'] and cfg.run['workers'] == 2   # merged into the input file's section
+    assert cfg.run['recompute'] and cfg.run['workers'] == 2   # merged into the settings file's section
 
 
 # --- model ----------------------------------------------------------------------------
@@ -43,13 +43,13 @@ def test_model_roles(toy_model):
 
 
 def test_wrong_site_density(tmp_path):
-    cfg = hsk.load_config(write_input(tmp_path, TOY_INPUT, "expected_site_density = (2.5e-8, 'mol/cm2')\n"))
+    cfg = hsk.load_config(write_settings(tmp_path, TOY_SETTINGS, "expected_site_density = (2.5e-8, 'mol/cm2')\n"))
     with pytest.raises(hsk.ModelError, match='site density'):
         hsk.Model(cfg)
 
 
 def test_impurity_by_composition(tmp_path):
-    cfg = hsk.load_config(write_input(tmp_path, TOY_INPUT, "impurities = {'imp': {'Ix': 1}}\n"))
+    cfg = hsk.load_config(write_settings(tmp_path, TOY_SETTINGS, "impurities = {'imp': {'Ix': 1}}\n"))
     assert hsk.Model(cfg).impurities == {'imp': 'I'}
 
 
