@@ -48,13 +48,16 @@ temperatures = [650.0, 800.0, 1000.0, 1200.0]   # K: temperature series, at refe
 reference_pressure = 1.0e5                      # Pa: H2 partial pressure of the temperature series
 pressures = [1.0e3, 1.0e5, 1.0e7]               # Pa: pressure series (0.01, 1, 100 bar, as in the RMG reactors)
 pressure_temperatures = [650.0, 1200.0]         # K: a pressure series at each
-impurity_ratio = 0.25                           # p(impurity) / p(H2), the same in both series
+# p(impurity) / p(H2): the proportions of the first RMG reactor (H2 = 190), for every case.
+# Each impurity alone sits at its own level, and 'all' is that reactor's gas. The same in both series.
+impurity_ratio = {'H2O': 10 / 190, 'CO2': 0.05 / 190, 'CO': 1 / 190, 'CH4': 0.8 / 190,
+                  'N2': 0.85 / 190, 'O2': 0.15 / 190, 'NH3': 0.1 / 190}
 mixture_mode = 'same_each'
 include_input_basis = False
 
 # --- What to run -----------------------------------------------------------------------
-analyses = ['steady_state', 'composition', 'diagnostics', 'curves', 'sweep', 'orders',
-            'rate_control', 'paths', 'transients']
+analyses = ['steady_state', 'composition', 'diagnostics', 'convergence', 'curves', 'sweep',
+            'pressure_sweep', 'orders', 'rate_control', 'paths', 'transients']
 plot_style = 'publication'
 
 # --- Analysis settings -----------------------------------------------------------------
