@@ -767,7 +767,7 @@ The code computes the first two factors as `blocking_from_theta`, and `blocking_
 3. **Readable labels.** Use the `species_labels` dictionary of `input.py` where an entry exists. Otherwise build one automatically: "empty site" for the empty site; for others the formula (C, H, N and O first, then other elements alphabetically; site atoms left out), one `*` per occupied site, and the mechanism number, because isomers share a formula.
 4. **Stacked bars**: one panel per temperature and one bar per case. Segments are empty sites (pale neutral); then up to `composition['max_named']` (7) species that reach `composition['min_plotted']` (2 %) anywhere, ordered by peak coverage with a fixed color each; then everything else as "other".
 
-**Design choices.** The same species keeps the same color in every panel. Empty sites are neutral so they read as "nothing here". The thresholds keep the legend short.
+**Design choices.** The same species keeps the same color in every panel, and in the coverage-against-temperature figure of Stage 11.2 (`composition.species_palette`: colors follow the species, not its rank). Empty sites are neutral so they read as "nothing here". The thresholds keep the legend short.
 
 ## Stage 9: Rate plots
 
@@ -795,7 +795,7 @@ If both bases were computed, `basis_comparison.csv` gives the ratio $\mathrm{TOF
 
 **At a glance.**
 - Inputs: the mechanism, the results, literature values entered by hand.
-- Outputs: `mechanism_binding_check.csv`, `mechanism_switch_off.csv` (the what-if runs), `top_reactions.csv`.
+- Outputs: `mechanism_binding_check.csv` and `binding_check.png`, `mechanism_switch_off.csv` (the what-if runs), `top_reactions.csv`.
 - Code: `analyses/diagnostics.py`: `reaction_thermo`, `binding_check` (10.1); `switch_off` (10.2); `top_reactions` (10.3). Settings: the `diagnostics` section (`adsorption_checks`, `switch_off`, `switch_off_cases`, `top_reactions`, `top_n`).
 
 ```mermaid
@@ -824,6 +824,8 @@ with reference-state values ([Section 2.3](#23-thermodynamic-consistency)). $\De
 $$\frac{\theta_k}{\theta_\ast} = \exp\!\left(-\frac{\Delta G_{\mathrm{ads}}}{RT}\right)\frac{p_k}{P^\circ},$$
 
 so a binding energy that is too strong by $\delta$ raises $\theta_k/\theta_\ast$ by about $\exp(\delta/RT)$.
+
+**Figure** (`binding_check.png`): one row per adsorption, the literature range as a gray bar and the mechanism's $\Delta H_{298}$ as a marker. The verdict is shown three ways: color (blue = too weak, red = too strong, dark = within range), marker shape (◀ too strong, ▶ too weak, ● within range), and a text label beside every value outside its range.
 
 ### 10.2 What-if experiments with rate multipliers
 
@@ -890,6 +892,7 @@ Report the results with their caveats listed; or run what-if sensitivity tests t
 - **Log-axis floors.** A display floor (10⁻¹²) applies to coverages only. Applying it to $\Pi$ would clip real values: strong poisons can reach $\Pi < 10^{-12}$.
 - **Boundary cases of $r_{1/2}$.** If $\Pi < 0.5$ already at the lowest level tested, the table reports that level as an upper bound ("at most this"); if $\Pi$ never falls below 0.5, it reports "never halved in the range tested".
 - **Two starts at every level**, so a window with two steady states (Figure 5) is visible as a ring around the affected points.
+- **Half-rate marker.** An open diamond on the 0.5 line marks each interpolated $r_{1/2}$, in the impurity's color. Bounds ("at most this", "never halved") get no marker; they are in `poisoning_tolerance.csv`.
 
 ### 11.2 Temperature sweep
 
@@ -906,7 +909,9 @@ $$E_{\mathrm{app}}(T) = -R\,\frac{\partial\ln\mathrm{TOF}}{\partial(1/T)} ;$$
 **Details found while building it.**
 - **Gaps, not bridges.** A temperature without a converged steady state is plotted as a gap, so a line never jumps across a missing point.
 - **"No steady state" is a result.** A condition can relax for longer than `reactor_t_max` (for example, an adsorbate slowly converting into a more stable form). The reactor method then reports "no plateau" and the point is left out rather than given a misleading value; 11.6 shows what happens over time instead. Each such point can cost up to the direct-solve and reactor time limits, so expect the sweep to take longer where it occurs.
-- **Release temperature notes**: "rate never below half (not poisoning)", or "still poisoned at <highest T>".
+- **Release temperature notes**: "rate never below half (not poisoning)", or "still poisoned at <highest T>". Each release temperature is marked on panel (c) with an open diamond on the 0.5 line.
+
+**What covers the surface against temperature** (`sweep_coverages.png`): one panel per case, one stacked bar per solved temperature, with the species colors of Stage 8. Bars rather than areas, because every temperature is a separate solve: an isolated converged point still shows, and a temperature without a steady state is a visible gap. This is the figure that explains the rate curves, for example which adsorbate holds the sites up to which temperature.
 
 ### 11.3 Reaction orders
 
@@ -920,6 +925,8 @@ for the probe gas and, in impurity cases, for the impurity.
 - order ≈ 0 in the probe gas when its own adsorbate fills the surface ($\theta_\ast \propto p_{A_2}^{-1/2}$ cancels the explicit $p_{A_2}$);
 - order ≈ −2 in the impurity and ≈ +1 in the probe gas when the impurity controls the empty sites ($\theta_\ast \propto 1/p_I$, squared): the signature of a strongly adsorbed poison;
 - values in between when both share the surface.
+
+**Figure.** The orders are drawn in the bottom panel of `rate_control.png` (Stage 11.4), one marker per case and pressure (● probe gas, ■ impurity), labeled where $|n_j| \ge 0.1$.
 
 **Details.** The step must be large enough that the rate change exceeds the solver's tolerance on the TOF ($\varepsilon_{\mathrm{TOF}} = 10^{-4}$ for the reactor method): with $\delta$ = 0.1 the logarithmic span is 0.2, so the error in $n_j$ is about $10^{-3}$. The flag `all_starts_agree` is True only if every perturbed point agreed between its two starts.
 
@@ -958,7 +965,9 @@ Together these give exactly the intended changes. For reactions with $n$ as a re
 
 So every perturbed solve starts from a **clean surface with the normal method choice**, exactly like its base solve. This is slower, but correct: from a clean start the plateau test only passes once the slow species have settled.
 
-**Code.** `analyses/rate_control.py`: `drc_reactions`, `trc_species`, `trc_multipliers`, `run`. Each perturbed solve is a job with its own `multipliers` and `h_shifts`, which are part of its cache fingerprint (`output/cache_sensitivity/`).
+**Figure** (`rate_control.png`, "what controls the rate"): top, the TRC of the forward probe rate, one panel per (T, case), species with $|X_{\mathrm{TRC}}| \ge 0.01$, with the sum in the axis label; bottom, the reaction orders of Stage 11.3 at the same temperatures, if that analysis ran (in the same session, or earlier: then its `reaction_orders.csv` is used). For a probe step that needs $n$ empty sites, with adsorbates in equilibrium with the gas, $X_{\mathrm{TRC},i} \approx -n\,\theta_i$, so the values add up to about $-n(1-\theta_\ast)$: whichever species holds the sites controls the rate, in proportion to how many it holds. DRC is not drawn: it is reported in the table, and usually sits entirely on the probe step.
+
+**Code.** `analyses/rate_control.py`: `drc_reactions`, `trc_species`, `trc_multipliers`, `plot_rate_control`, `run`. Each perturbed solve is a job with its own `multipliers` and `h_shifts`, which are part of its cache fingerprint (`output/cache_sensitivity/`).
 
 ### 11.5 Reaction path diagrams
 
@@ -1333,7 +1342,7 @@ All files are in the run's `output/` folder. With `plot_style = 'publication'`, 
 
 **`basis_comparison.csv`** (Stage 9, with `include_input_basis`): forward TOF on both bases and their ratio.
 
-**`mechanism_binding_check.csv`** (Stage 10.1): `adsorption`, `dH_298_mech`, `dH_literature`, `verdict`, `dG_<T>` for each main temperature, `literature_note`.
+**`mechanism_binding_check.csv`** (Stage 10.1): `adsorption`, `dH_298_mech`, `dH_literature`, `lit_low`, `lit_high`, `verdict`, `dG_<T>` for each main temperature, `literature_note`. Figure: `binding_check.png`.
 
 **`mechanism_switch_off.csv`** (Stage 10.2): `switched_off`, `case`, `T_K`, `tof_normal`, `theta_free_normal`, `converged`, `tof_switched_off`, `theta_free_switched_off`, `top_switched_off`, `tof_ratio`, and `slowdown_normal`/`slowdown_switched_off` relative to the reference case.
 
@@ -1341,8 +1350,9 @@ All files are in the run's `output/` folder. With `plot_style = 'publication'`, 
 
 **Stage 11**:
 - `poisoning_curves.csv`, `poisoning_curves.png` (11.1): one row per (T, case, level) with the Stage 7 columns and `ratio`; `poisoning_tolerance.csv`: `ratio_at_half_rate`, `ppm_of_probe` and `note` per (T, impurity).
-- `temperature_sweep.csv`, `temperature_sweep.png` (11.2): the same per (case, T), plus `E_app_kJ_per_mol`; `release_temperature.csv`: `release_T_K` and `note` per impurity.
+- `temperature_sweep.csv`, `temperature_sweep.png` (11.2): the same per (case, T), plus `E_app_kJ_per_mol`; `release_temperature.csv`: `release_T_K` and `note` per impurity; `sweep_coverages.png`: what covers the surface against temperature.
 - `reaction_orders.csv` (11.3): `T_K`, `case`, `tof_fwd_base`, `order_probe`, `order_impurity`, `all_starts_agree`.
+- `rate_control.png` (11.3–11.4): TRC per case and the reaction orders.
 - `sensitivity.csv` (11.4): `kind` (DRC or TRC), `T_K`, `case`, `item` (reaction index or species), `label`, `X_tof_fwd`, `X_probe_consumed`, `methods` (solver used for the + and − perturbations).
 - `reaction_paths/path_<element>_<case>_<T>K_<flow>.dot` and `.png` (11.5).
 - `poisoning_over_time.csv` (11.6): `tof_t0`, `tof_end`, `end_over_t0`, `min_over_t0`, `t_min_s`, `t_end_s`, `t_half_s`, `t_tenth_s`, `t_settle_s`, `gas_drift`, `top_species_end`, `error`; `poisoning_over_time_trajectories.csv`: every recorded time point; `poisoning_over_time.png`.
