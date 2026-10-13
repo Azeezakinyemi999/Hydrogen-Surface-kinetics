@@ -11,7 +11,7 @@ from hydrogen_surface_kinetics import conditions as C, plotting as P
 from hydrogen_surface_kinetics.config import site_density_kmol_m2
 from hydrogen_surface_kinetics.labels import formula, probe_label, species_label
 
-from conftest import TOY_INPUT, write_input
+from conftest import TOY_SETTINGS, write_settings
 
 TWO_IMPURITIES = """
 impurities = {'I': 'I', 'AI': 'AI'}
@@ -29,7 +29,7 @@ def test_formula_and_labels(toy_model):
 
 
 def test_species_labels_setting(tmp_path):
-    cfg = hsk.load_config(write_input(tmp_path, TOY_INPUT, "species_labels = {'I(s)': 'poison*'}\nprobe_label = 'A2'\n"))
+    cfg = hsk.load_config(write_settings(tmp_path, TOY_SETTINGS, "species_labels = {'I(s)': 'poison*'}\nprobe_label = 'A2'\n"))
     m = hsk.Model(cfg)
     assert species_label(m, 'I(s)') == 'poison*' and probe_label(m) == 'A2'
 
@@ -40,7 +40,7 @@ def test_site_density_units():
 
 
 def test_mixture_modes(tmp_path):
-    m = hsk.Model(hsk.load_config(write_input(tmp_path, TOY_INPUT, TWO_IMPURITIES)))
+    m = hsk.Model(hsk.load_config(write_settings(tmp_path, TOY_SETTINGS, TWO_IMPURITIES)))
     df = C.main_conditions(m)
     assert list(df['case']) == ['probe only', 'I', 'AI', 'both']
     both = df[df['case'] == 'both'].iloc[0]
@@ -51,7 +51,7 @@ def test_mixture_modes(tmp_path):
 
 
 def test_input_basis(tmp_path):
-    m = hsk.Model(hsk.load_config(write_input(tmp_path, TOY_INPUT, TWO_IMPURITIES + "include_input_basis = True\n")))
+    m = hsk.Model(hsk.load_config(write_settings(tmp_path, TOY_SETTINGS, TWO_IMPURITIES + "include_input_basis = True\n")))
     df = C.main_conditions(m)
     assert set(df['basis']) == {'fixed_probe', 'input_X'}
     x = df[(df['basis'] == 'input_X') & (df['case'] == 'I')].iloc[0]
@@ -62,20 +62,20 @@ def test_input_basis(tmp_path):
 
 def test_input_pressure_mode(tmp_path):
     with pytest.raises(hsk.ConfigError, match='input_pressures'):
-        hsk.load_config(write_input(tmp_path, TOY_INPUT, "pressure_mode = 'input'\ninput_pressures = {400: 2e5}\n"))
-    cfg = hsk.load_config(write_input(tmp_path, TOY_INPUT, "pressure_mode = 'input'\ninput_pressures = {500: 2e5}\n"))
+        hsk.load_config(write_settings(tmp_path, TOY_SETTINGS, "pressure_mode = 'input'\ninput_pressures = {400: 2e5}\n"))
+    cfg = hsk.load_config(write_settings(tmp_path, TOY_SETTINGS, "pressure_mode = 'input'\ninput_pressures = {500: 2e5}\n"))
     df = C.main_conditions(hsk.Model(cfg))
     assert np.allclose(df['P_probe_bar'], 2.0)
 
 
 def test_unknown_role_species(tmp_path):
     with pytest.raises(hsk.ModelError, match="probe_adsorbate 'B\\(s\\)'"):
-        hsk.Model(hsk.load_config(write_input(tmp_path, TOY_INPUT, "probe_adsorbate = 'B(s)'\n")))
+        hsk.Model(hsk.load_config(write_settings(tmp_path, TOY_SETTINGS, "probe_adsorbate = 'B(s)'\n")))
 
 
 def test_unknown_section_key(tmp_path):
     with pytest.raises(hsk.ConfigError, match="unknown 'curves' settings"):
-        hsk.load_config(write_input(tmp_path, TOY_INPUT, "curves = {'ratio': [0.1]}\n"))
+        hsk.load_config(write_settings(tmp_path, TOY_SETTINGS, "curves = {'ratio': [0.1]}\n"))
 
 
 def test_subscripts():
@@ -106,3 +106,22 @@ def test_flux_needs_paths(toy_cfg):
     from hydrogen_surface_kinetics import analyses
     with pytest.raises(ValueError, match="rmg_input"):
         analyses.run(toy_cfg, only='flux', log=lambda *a: None)
+
+
+def test_rmg_input_is_refused(tmp_path):
+    rmg = tmp_path / 'input.py'
+    rmg.write_text("database(\n    thermoLibraries=['primaryThermoLibrary'],\n)\ncatalystProperties(metal='Ni111')\n")
+    with pytest.raises(hsk.ConfigError, match='looks like an RMG input file'):
+        hsk.load_config(str(rmg))
+
+
+def test_flux_finds_rmg_files_next_to_settings(tmp_path):
+    from hydrogen_surface_kinetics.analyses import flux
+    from hydrogen_surface_kinetics.analyses.common import Context
+    (tmp_path / 'input.py').write_text("database()\n")
+    (tmp_path / 'seed' / 'seed').mkdir(parents=True)
+    (tmp_path / 'seed' / 'seed' / 'reactions.py').write_text('')
+    cfg = hsk.load_config(write_settings(tmp_path))
+    ctx = Context(hsk.Model(cfg), log=lambda *a: None)
+    rmg_input, seed_dir = flux.default_rmg_files(ctx)
+    assert rmg_input == str(tmp_path / 'input.py') and seed_dir == str(tmp_path / 'seed' / 'seed')
