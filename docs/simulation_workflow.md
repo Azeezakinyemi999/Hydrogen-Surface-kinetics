@@ -39,6 +39,7 @@ How the `hydrogen_surface_kinetics` package simulates a surface reaction mechani
 - **Part IV. Practical**
   [Running an analysis](#running-an-analysis) ·
   [Writing a settings.py](#writing-a-settingspy) ·
+  [Reading the results](#reading-the-results) ·
   [Troubleshooting](#troubleshooting) ·
   [Reproducibility checklist](#reproducibility-checklist) ·
   [Code map](#code-map) ·
@@ -67,7 +68,7 @@ Read Part I first: it explains what the workflow is for and how the stages fit t
 | **Design choices** | why it is done this way, and which alternatives were rejected |
 | **Checks and failure modes** | what is verified, and what goes wrong |
 
-Part IV is for day-to-day use: running an analysis, writing the input file for a new mechanism, troubleshooting, reproducibility, a map of the code, and planned improvements. The appendices list the notation, every setting, the columns of every output file, unit conversions, how the equations were checked, a glossary and references.
+Part IV is for day-to-day use: running an analysis, writing the input file for a new mechanism, reading the results, troubleshooting, reproducibility, a map of the code, and planned improvements. The appendices list the notation, every setting, the columns of every output file, unit conversions, how the equations were checked, a glossary and references.
 
 **Running example and notation.** The document uses generic symbols:
 
@@ -1127,6 +1128,90 @@ For a new mechanism, metal or impurity set:
 10. **Environment.** If the Cantera version changed, run `docs/figures/check_equations.py`.
 
 `runs/ni_first_try/settings.py` is a complete example with every analysis configured (temperature series only). `runs/try_*/<metal>/settings.py` are examples with both series, written next to their RMG files.
+
+## Reading the results
+
+This section is for interpreting the outputs, not for how they are computed (Part III does that). Start from your question in Table R1, find the figure or table, and read it with Tables R2 and R3. Table R4 lists patterns that recur across analyses and what they mean. Every file is in the run's `output/` folder; column definitions are in [Appendix C](#c-output-files). Figures of point-based analyses come as `<name>_vs_T` (temperature series) and `<name>_vs_P` (pressure series).
+
+**Conventions used in every figure**
+
+- **Rates** are turnover frequencies (TOF): events per site per second (s⁻¹). "Forward" is the rate of the probe reaction in the adsorption direction, the quantity of interest; "net" is forward minus reverse and is close to 0 near equilibrium.
+- **Poisoning factor** $\Pi$ = TOF with the impurity / TOF of the probe gas alone, at the same temperature and probe-gas pressure. $\Pi = 1$: no effect; $\Pi = 0.5$: the rate is halved (dashed line in the figures); $\Pi = 10^{-6}$: a million times slower. The slowdown is $1/\Pi$.
+- **Impurity level** $r = p_{\text{impurity}}/p_{\text{probe gas}}$; $10^{-6}$ = 1 ppm of the probe gas.
+- **Coverages** are fractions of sites; "impurity-held" means every site not empty and not holding the probe gas or its adsorbate.
+- **Markers.** Open ring: the two starting surfaces reached different steady states (two steady states; Stage 5). Open diamond on the 0.5 line: where the rate is halved (a half-rate level, release temperature or half-rate pressure). Gap in a line: no converged steady state at that point; it is a result, not a plotting error.
+- **Colors** follow the case or species, never the rank, so the same impurity or adsorbate has the same color in every figure of a run.
+
+### Table R1. Where to find the answer
+
+| Question | Look at | What answers it |
+|---|---|---|
+| How fast is the probe reaction (H₂ dissociation) at each condition? | `rates_summary_vs_T/_vs_P` (a); `steady_state_results.csv` | `tof_fwd` (s⁻¹) |
+| What covers the surface? | `surface_composition_vs_T/_vs_P`; `steady_state_surface_species.csv` | species and their coverages, largest first |
+| How much does each impurity slow it down? | `rates_summary_*` (b); `steady_state_results.csv` | `slowdown_x` (times slower), `poisoning_factor` |
+| From what impurity level is it a problem? | `poisoning_curves_*` (a); `poisoning_tolerance.csv` | `ratio_at_half_rate`, `ppm_of_probe` |
+| Does a higher temperature help? | `temperature_sweep` (c); `release_temperature.csv` | `release_T_K`: where the rate recovers to half |
+| Does a higher pressure help? | `pressure_sweep` (c); `half_rate_pressure.csv` | `half_rate_P_bar` and its `direction` |
+| Why is it slower: lost sites, or something else? | `site_blocking`; `blocking_check` in the tables | the rate follows the site-blocking prediction or not |
+| Which species or step controls the rate? | `rate_control_<T>K_<P>bar`; `sensitivity.csv`; `reaction_orders.csv` | TRC per species, DRC per reaction, reaction orders |
+| How fast does a working catalyst get poisoned? | `poisoning_over_time_*`; `poisoning_over_time.csv` | `t_half_s`, `t_tenth_s`, `min_over_t0`, `end_over_t0` |
+| Where do the H atoms go? | `reaction_paths/*.png` | edge widths and labels (relative fluxes) |
+| Is there more than one possible steady state? | rings and dashed branches in `poisoning_curves_*`; `starts_agree` | `starts_agree = False` |
+| Can I trust the mechanism? | `binding_check`; `mechanism_switch_off.csv`; `top_reactions.csv` | verdicts vs literature; sensitivity to suspect species |
+| Did the solver really converge? | `status` command; `convergence`; `converged` columns | accepted checkpoint, residual below 1 and staying there |
+
+### Table R2. Figures
+
+| Figure | What it shows | How to read it | Check before believing it |
+|---|---|---|---|
+| `rates_summary_vs_T`, `_vs_P` (Stage 9) | per case (x axis): (a) forward TOF, (b) slowdown vs the probe gas alone, (c) fraction of empty sites. One marker shape and color per temperature (`_vs_T`) or pressure (`_vs_P`; one row per pressure-series temperature) | (a) log scale: one decade up = 10× faster. (b) points above the dashed "no effect" line are slower; open markers = the slowdown if the number of sites were fixed, so a big gap between filled and open markers means multi-site adsorbates (CO\*\*) inflate the site count. (c) few empty sites = a crowded surface | each point needs `converged` and `starts_agree` True in `steady_state_results.csv` |
+| `surface_composition_vs_T`, `_vs_P` (Stage 8) | stacked bars: one bar per case, one panel per point; segments = coverage of each species | the tallest segment is what holds the surface; compare a case's bar with the reference bar to see what the impurity displaced. Pale gray = empty sites; dark gray "other" = everything below the plotting threshold together | a large "other" means many minor species; list them in `steady_state_surface_species.csv` |
+| `binding_check` (Stage 10.1) | per adsorption: literature range (gray bar) and the mechanism's ΔH at 298 K (marker) | a marker on its bar is consistent; ◀ red, left of the bar = binds too strongly (over-predicts that adsorbate's coverage); ▶ blue, right = too weakly. Error of δ shifts θ/θ\* by about $e^{\delta/RT}$ | literature ranges are entered by hand in `settings.py`: verify them |
+| `convergence` (Stage 4) | per traced condition: (a) coverages, (b) forward TOF, (c) normalized residual, against surface time from a clean surface | the dotted line is where the reactor method accepted the state. A good trace: everything flat after the dotted line and the residual below the dashed limit (1) to the end. Residual climbing back above 1, or coverages moving late (10⁶–10⁸ s), means the accepted state was a long-lived intermediate | "never accepted" = no plateau within `reactor_t_max`: treat that point as no steady state |
+| `poisoning_curves_vs_T`, `_vs_P` (Stage 11.1) | per point: (a) Π against impurity level, (b) impurity-held sites; one line per impurity | read along a line: where it crosses the dashed 0.5 line (diamond) is the tolerated level. A steep drop over a decade = a threshold-like poison. Ring + dashed line + shaded band = two steady states: solid is a fresh (clean) catalyst, dashed one that was covered first; inside the band the history decides | Π below $10^{-12}$ is real (log axis, no floor on Π); coverages are floored at $10^{-12}$ for display only |
+| `site_blocking` (Stage 7) | at one point, per impurity: (a) empty vs impurity-held sites, (b) site-count factor f, (c) Π from rates (dots), full site-blocking prediction (line), coverage-only prediction (dashed) | dots on the line: the impurity acts only by taking sites. Dashed below the line: multi-site adsorbates raise f, and the coverage-only estimate would exaggerate the poisoning | dots off the line: the probe step is not simply elementary, or rates depend on coverage; see `blocking_check` |
+| `temperature_sweep` (Stage 11.2) | (a) Arrhenius plot, log TOF against 1000/T (hot on the left), (b) apparent activation energy against T, (c) Π against T | (a) a straight line = constant E_app; curvature = coverages changing with T. (b) an impurity case far above the reference = the impurity frees sites as T rises. (c) a rising curve = poisoning lifts with temperature; the diamond is the release temperature | gaps = no steady state; RMG estimates are least reliable far from the conditions it was run at |
+| `sweep_coverages`, `pressure_sweep_coverages_<T>K` | stacked bars of coverage against T (or p), one panel per case | follow a color across bars to see which adsorbate gives way to which as T (or p) changes; this explains the rate curves | missing bars = no steady state |
+| `pressure_sweep` (Stage 11.2b) | per temperature: (a) TOF against p (log–log), (b) local slope d ln TOF/d ln p, (c) Π against p | (b) for the probe gas alone, slope 1 = few adsorbates, 0 = surface saturated with H\*. With an impurity at fixed purity, slope near −1 = a strong poison that scales with pressure. (c) diamond = the pressure where Π crosses 0.5 | impurities scale with H₂ (same purity), so this is not "more H₂ against a fixed impurity" |
+| `rate_control_<T>K_<P>bar` (Stage 11.3–11.4) | one per point: TRC bars per case; a DRC row where it is not trivial; reaction orders | TRC: the bar is $X_{\mathrm{TRC}} = \partial\ln r/\partial(-G/RT)$, how strongly the rate responds when that species is made more stable; negative = it holds sites the reaction needs. Values sum to about −n(1−θ\*) (−2 for H₂ dissociation on a crowded surface). DRC (blue forward, orange net): which elementary steps limit the rate; net values add up to 1. Orders: see Table R4 | DRC near equilibrium is round-off except on the probe step; DRC is shown only where it carries information |
+| `reaction_paths/path_<el>_<case>_<T>K_<P>bar_OneWayFlow.png` (Stage 11.5) | where atoms of one element flow between species at a steady state | arrows = flow direction; width and label = flux relative to the largest; "Scale" below = that largest flux (kmol m⁻² s⁻¹; divide by Γ for s⁻¹). One-way flow shows both directions, so a pair at equilibrium shows two equal arrows | fluxes below 10⁻⁸ of the largest are hidden; the probe step can be 10⁻⁵–10⁻⁶ of an equilibrated exchange |
+| `poisoning_over_time_vs_T`, `_vs_P` (Stage 11.6) | per point and impurity: TOF relative to t = 0 (top) and impurity-held sites (bottom) after the impurity arrives; light to dark = more impurity | where a line crosses the dashed 0.5 is the time to half rate. A dip below the final level, then partial recovery, = a transient worse than the steady state (the deepest drop is `min_over_t0`) | half-times are sensitive to the start: quote them to 2 significant figures |
+| `flux/<n>/flux_diagram.avi` (Stage 2, optional) | species-to-species fluxes over time in each RMG reactor | edge width = flux (log scale); compare node borders only within the gas or within the surface | uses RMG's reactors (gas changes), not the fixed-gas steady state |
+
+### Table R3. Result tables: the numbers to quote
+
+| File | Quote | Meaning and typical values |
+|---|---|---|
+| `steady_state_results.csv` | `tof_fwd`, `poisoning_factor`, `slowdown_x`, `theta_free`, `theta_probe`, `top_species` | one row per case and point. `blocking_check` should be 1 (±10⁻⁶); `converged` and `starts_agree` should be True |
+| `steady_state_surface_species.csv` | `species`, `coverage` | every species above 10⁻³ per condition, readable names |
+| `poisoning_tolerance.csv` | `ratio_at_half_rate`, `ppm_of_probe` | impurity level that halves the rate. Notes: "already halved at the lowest level: at most this" (an upper bound) or "never halved in the range tested" |
+| `release_temperature.csv` | `release_T_K` | lowest T at which the rate is back to half. Notes: "rate never below half (not poisoning)", "still poisoned at <highest T> K" |
+| `half_rate_pressure.csv` | `half_rate_P_bar`, `direction` | probe-gas pressure where Π crosses 0.5, and whether it recovers above or falls below half going up |
+| `reaction_orders.csv` | `order_probe`, `order_impurity` | d ln TOF / d ln p at the point (Table R4) |
+| `sensitivity.csv` | `X_tof_fwd` (TRC rows), `X_probe_consumed` (DRC rows) | TRC: the largest negative values name the site holders; DRC: the rate-limiting steps |
+| `poisoning_over_time.csv` | `t_half_s`, `t_tenth_s`, `min_over_t0`, `end_over_t0`, `t_settle_s` | time to half and to a tenth of the initial rate; deepest drop; final level; time to settle within 10 % |
+| `mechanism_binding_check.csv` | `dH_298_mech`, `verdict` | OK / TOO STRONG / TOO WEAK against the literature range |
+| `mechanism_switch_off.csv` | `tof_ratio`, `slowdown_switched_off` vs `slowdown_normal` | how much a suspect species matters; a large change means conclusions depend on it |
+| `convergence.csv` | `accepted_s`, `norm_residual` | when the state was accepted; the residual should stay below 1 afterwards |
+
+### Table R4. Common patterns and what they mean
+
+| You see | It means | Do |
+|---|---|---|
+| Π follows the site-blocking prediction (`blocking_check` ≈ 1) | the impurity slows the rate only by taking the sites the probe reaction needs | find which species takes them (`surface_composition`, TRC) |
+| `blocking_check` ≠ 1 | coverage-dependent rate parameters, a non-elementary probe step, or a wrong role species | check the probe reaction found by `check` |
+| Filled and open markers far apart in `rates_summary` (b); f > 1 | multi-site adsorbates inflate Cantera's site count | report both, or rely on the open-marker estimate as a bound |
+| `starts_agree = False`, ring markers, shaded band | two steady states: the answer depends on whether the catalyst saw the impurity first | report both branches; the band is the hysteresis window |
+| Order in the impurity ≈ −2 and in H₂ ≈ +1 | a strongly bound poison controls the empty sites ($\theta_\ast \propto 1/p_I$) | a strong poison: tolerance is set by its binding strength (TRC) |
+| Order in H₂ ≈ 0 for the probe gas alone | the surface is saturated with H\* | rate set by H\* desorption/adsorption equilibrium |
+| TRC concentrated on one species (≈ −2) | that species holds nearly all sites | its binding energy is what matters: check it in `binding_check` |
+| DRC = 1 on the probe step, 0 elsewhere | the probe step itself is slowest; everything else is equilibrated | the impurity acts through coverages, not through other steps |
+| E_app of an impurity case much higher than the reference | the impurity desorbs as T rises, freeing sites | expect a release temperature |
+| Pressure-sweep slope → −1 with an impurity | at fixed purity, more pressure means more poison as well as more H₂ | purity, not total pressure, sets the poisoning |
+| Transient dips far below its final level | the surface first floods with a fast-adsorbing form, then relaxes | the worst moment is `min_over_t0`, not the steady state |
+| Residual rises above 1 after acceptance (`convergence`) | the accepted state was not final: something slow is still changing | treat that point as provisional; extend `reactor_t_max` or report it as a slow drift |
+| Gaps in sweep lines, "not converged" in `status` | no steady state within `reactor_t_max` | look at the `convergence` trace of that condition |
+| A binding verdict "TOO STRONG" for a dominant adsorbate | its coverage, and the poisoning it causes, are probably over-predicted | use `switch_off` to see if conclusions survive; ask for a corrected mechanism (Stage 10.5) |
 
 ## Troubleshooting
 
