@@ -22,11 +22,30 @@ def cmd_check(args):
     cfg = load_config(args.settings)
     model = Model(cfg)
     print(model.summary())
-    from .conditions import main_conditions
+    from .conditions import main_conditions, series_points
+    from .analyses.common import Context
+    from .analyses.plan import counts
+    pts = series_points(cfg)
+    t_pts = [p for p in pts if p['series'] in ('temperature', 'both')]
+    p_pts = [p for p in pts if p['series'] in ('pressure', 'both')]
+    temps = ', '.join(f"{p['T']:g}" for p in t_pts)
+    print(f'\ntemperature series: {temps} K at {cfg.reference_pressure / 1e5:g} bar')
+    if p_pts:
+        for T in sorted({p['T'] for p in p_pts}):
+            Ps = ', '.join(f"{P / 1e5:g}" for P in sorted(p['P'] for p in p_pts if p['T'] == T))
+            print(f'pressure series:    {Ps} bar at {T:g} K')
+    else:
+        print('pressure series:    none (pressures = [])')
     conds = main_conditions(model)
-    print(f'\n{len(conds)} main conditions:')
+    print(f'\n{len(conds)} main conditions ({len(pts)} points x cases):')
     print(conds.drop(columns='X').to_string(index=False))
-    print(f'\nanalyses: {cfg.analyses}\noutput: {cfg.output_dir}\nsettings OK')
+    print(f'\nanalyses: {cfg.analyses}')
+    table = counts(Context(model, log=lambda *a: None), cfg.analyses)
+    if len(table):
+        print('\nsolves per analysis (nothing is solved by check):')
+        print(table.to_string(index=False))
+        print(f"total to solve: {int(table['to_solve'].sum())}")
+    print(f'\noutput: {cfg.output_dir}\nsettings OK')
 
 
 def cmd_run(args):

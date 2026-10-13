@@ -60,12 +60,34 @@ def test_input_basis(tmp_path):
     assert sum(mix['X'].values()) == pytest.approx(1.0)           # 0.75 + 2 x 0.05, renormalized
 
 
-def test_input_pressure_mode(tmp_path):
-    with pytest.raises(hsk.ConfigError, match='input_pressures'):
-        hsk.load_config(write_settings(tmp_path, TOY_SETTINGS, "pressure_mode = 'input'\ninput_pressures = {400: 2e5}\n"))
-    cfg = hsk.load_config(write_settings(tmp_path, TOY_SETTINGS, "pressure_mode = 'input'\ninput_pressures = {500: 2e5}\n"))
-    df = C.main_conditions(hsk.Model(cfg))
-    assert np.allclose(df['P_probe_bar'], 2.0)
+def test_removed_pressure_mode(tmp_path):
+    with pytest.raises(hsk.ConfigError, match="'pressure_mode' removed"):
+        hsk.load_config(write_settings(tmp_path, TOY_SETTINGS, "pressure_mode = 'input'\ninput_pressures = {500: 2e5}\n"))
+
+
+def test_series_points_are_separate(tmp_path):
+    cfg = hsk.load_config(write_settings(tmp_path, TOY_SETTINGS,
+                                         "temperatures = [450, 500, 550]\npressures = [3e4, 3e5]\n"
+                                         "pressure_temperatures = [500, 600]\n"))
+    pts = {(p['T'], p['P']): p['series'] for p in C.series_points(cfg)}
+    # temperature series at the reference pressure; pressure series at each pressure temperature
+    assert pts[(450.0, 1e5)] == 'temperature' and pts[(550.0, 1e5)] == 'temperature'
+    assert pts[(500.0, 1e5)] == 'both'                           # the shared point is solved once
+    assert pts[(600.0, 1e5)] == 'pressure'                       # reference pressure joins every P series
+    assert pts[(500.0, 3e4)] == pts[(600.0, 3e5)] == 'pressure'
+    assert (450.0, 3e4) not in pts and (550.0, 3e5) not in pts   # no T x P grid
+    assert len(pts) == 3 + 2 * 3 - 1
+    only_T = C.series_points(cfg, series='temperature')
+    assert {p['P'] for p in only_T} == {1e5}
+
+
+def test_labels_do_not_change_the_cache_key(tmp_path):
+    from hydrogen_surface_kinetics import runner as R
+    from hydrogen_surface_kinetics.analyses.common import job
+    row = {'basis': 'b', 'case': 'c', 'T_K': 500.0, 'X': {'A2': 1.0}, 'P_ref_bar': 1.0}
+    a = job('k', {**row, 'series': 'temperature'})
+    b = job('k', {**row, 'series': 'both'})
+    assert R.cache_path(str(tmp_path), a, ()) == R.cache_path(str(tmp_path), b, ())
 
 
 def test_unknown_role_species(tmp_path):

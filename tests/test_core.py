@@ -67,7 +67,7 @@ def test_conditions(toy_model):
     assert list(df['case']) == ['probe only', 'I']          # one impurity: no mixture case
     row = df.iloc[1]
     assert np.isclose(row['P_probe_bar'], 1.0) and np.isclose(row['P_impurity_bar'], 1e-5)
-    assert C.condition_key(row) == 'fixed_probe | I | 500 K'
+    assert C.condition_key(row) == 'fixed_probe | I | 500 K | 1 bar'
 
 
 # --- solver ---------------------------------------------------------------------------

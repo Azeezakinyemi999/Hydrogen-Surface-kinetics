@@ -56,8 +56,44 @@ def setting(ctx, section, key, fallback):
     return fallback if v is None else v
 
 
-def temperatures(ctx, section):
-    return [float(t) for t in setting(ctx, section, 'temperatures', ctx.cfg.temperatures)]
+def points(ctx, section=None):
+    """The series points of an analysis: its section's series / temperatures / pressures /
+    pressure_temperatures, each None = the main settings (see conditions.series_points)."""
+    sec = ctx.cfg[section] if section else {}
+    return C.series_points(ctx.cfg, series=sec.get('series'), temperatures=sec.get('temperatures'),
+                           pressures=sec.get('pressures'), pressure_temperatures=sec.get('pressure_temperatures'))
+
+
+def reference_point(ctx, T, series='temperature'):
+    return {'T': float(T), 'P': float(ctx.cfg.reference_pressure), 'series': series}
+
+
+def point_name(pt):
+    """'300 K, 1 bar' (pt: a series point, or a row with T_K and P_ref_bar)."""
+    T = pt['T'] if 'T' in pt else pt['T_K']
+    P = pt['P'] / 1e5 if 'P' in pt else pt['P_ref_bar']
+    return f'{T:.0f} K, {P:g} bar'
+
+
+SERIES_SUFFIX = {'temperature': 'vs_T', 'pressure': 'vs_P'}
+
+
+def series_file(name, series, ext='png'):
+    """'rates_summary_vs_T.png' / 'rates_summary_vs_P.png'."""
+    return f'{name}_{SERIES_SUFFIX[series]}.{ext}'
+
+
+def series_groups(df, series):
+    """Split a results table (with T_K, P_ref_bar, series) into figure groups for one series:
+    temperature series -> one group at the reference pressure, varying T;
+    pressure series    -> one group per pressure-series temperature, varying P.
+    Returns [(group title, rows, varying column, value -> label)]."""
+    part = C.in_series(df, series)
+    if part.empty:
+        return []
+    if series == 'temperature':
+        return [(f'{P:g} bar', g, 'T_K', lambda v: f'{v:.0f} K') for P, g in part.groupby('P_ref_bar', sort=True)]
+    return [(f'{T:.0f} K', g, 'P_ref_bar', lambda v: f'{v:g} bar') for T, g in part.groupby('T_K', sort=True)]
 
 
 def impurity_labels(ctx, section):
@@ -68,20 +104,22 @@ def impurity_labels(ctx, section):
     return list(labels)
 
 
-def probe_pressure(ctx, T):
-    cfg = ctx.cfg
-    if cfg.pressure_mode == 'input' and float(T) not in cfg.input_pressures:
-        raise ValueError(f"pressure_mode = 'input' but input_pressures has no entry for {T:g} K")
-    return C.reference_pressure(cfg, T)
+def fixed_probe_row(ctx, basis, case, point, impurity_ratio=None, pressures=None, **extra):
+    """A fixed_probe condition row at a series point; `pressures` ({species: Pa}) overrides
+    the case (e.g. a perturbed point). The row carries the point's labels."""
+    pp = pressures or C.partial_pressures(ctx.model, case, 'fixed_probe', point['P'], impurity_ratio)
+    return C.point_row(ctx.model, basis, case, point, pp, **extra)
 
 
-def fixed_probe_row(ctx, basis, case, T, impurity_ratio=None, pressures=None, **extra):
-    """A fixed_probe condition row; `pressures` ({species: Pa}) overrides the case."""
-    model = ctx.model
-    pp = pressures or C.partial_pressures(model, case, 'fixed_probe', probe_pressure(ctx, T), impurity_ratio)
-    row = C.condition_row(model, basis, case, T, pp)
-    row.update(extra)
-    return row
+def job(key, row, **fields):
+    """A runner job: the row's physics is hashed, its labels go into '_labels'."""
+    physics, labels = C.split_labels(row)
+    return {'key': key, 'row': physics, '_labels': labels, **fields}
+
+
+def job_row(res):
+    """The full row (physics + labels) of a finished runner job."""
+    return {**res['job']['row'], **res['job'].get('_labels', {})}
 
 
 # --- rates at a solved state -----------------------------------------------------------
@@ -137,6 +175,7 @@ def results_frame(ctx, results, extra_cols=()):
     for key, res in results.items():
         r = res['row']
         out = {'key': key, 'basis': r['basis'], 'case': r['case'], 'T_K': r['T_K'],
+               'P_ref_bar': r.get('P_ref_bar'), 'series': r.get('series'),
                'P_total_bar': r['P_total_bar'], 'P_probe_bar': r['P_probe_bar'],
                'P_impurity_bar': r['P_impurity_bar'], **{c: r.get(c) for c in extra_cols}}
         ok = converged(res)
@@ -150,8 +189,8 @@ def results_frame(ctx, results, extra_cols=()):
     return pd.DataFrame(rows)
 
 
-def add_poisoning(df, ref_case, n_sites, by=('basis', 'T_K')):
-    """poisoning_factor = TOF / TOF(reference) at the same `by`; with the site-blocking check
+def add_poisoning(df, ref_case, n_sites, by=('basis', 'T_K', 'P_ref_bar')):
+    """poisoning_factor = TOF / TOF(reference) at the same `by` (the same point); with the site-blocking check
     TOF/TOF_ref = (theta*/theta*_ref)^n (p/p_ref) (f/f_ref)^n."""
     by = list(by)
     cols = ['tof_fwd', 'theta_free', 'P_probe_bar', 'site_count_factor']

@@ -5,7 +5,9 @@ in its own forked process (the child inherits the loaded Model), is stopped afte
 time limit, and when it finishes is saved straight away to
     <cache_dir>/<safe key>_<hash>.pkl
 The hash covers the job itself plus the model context (mechanism file contents, phase
-names, solver settings), so a saved result is never reused after any of those change.
+names, solver settings, Cantera version), so a saved result is never reused after any of
+those change. Job fields whose name starts with '_' are labels (e.g. which series a point
+belongs to): they are not hashed, so relabeling never forces a job to be solved again.
 """
 import hashlib
 import multiprocessing as mp
@@ -38,7 +40,7 @@ def safe_name(key):
 
 
 def cache_path(cache_dir, job, context):
-    spec = {k: v for k, v in job.items() if k != 'key'}
+    spec = {k: v for k, v in job.items() if k != 'key' and not k.startswith('_')}
     digest = hashlib.md5(repr((canonical(spec), canonical(context))).encode()).hexdigest()[:12]
     return os.path.join(cache_dir, f"{safe_name(job['key'])}_{digest}.pkl")
 
@@ -72,7 +74,9 @@ def run_jobs(func, jobs, cache_dir, context=(), workers=None, timeout=1800.0, re
         path = cache_path(cache_dir, job, context)
         if os.path.exists(path) and not recompute:
             with open(path, 'rb') as f:
-                results[job['key']] = pickle.load(f)
+                res = pickle.load(f)
+            res['job'] = job                   # same physics; the labels are this run's
+            results[job['key']] = res
         else:
             pending.append(job)
     log(f'{len(results)} loaded from cache, {len(pending)} to solve with {workers} workers')
