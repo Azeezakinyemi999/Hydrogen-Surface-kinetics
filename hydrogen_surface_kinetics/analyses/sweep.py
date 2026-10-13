@@ -8,10 +8,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+from .. import conditions as C
 from .. import plotting as P
 from ..labels import probe_label, species_label
 from . import common
-from .composition import coverage_table, species_palette
+from .composition import coverage_table, plot_coverage_bars
 
 
 def sweep_temperatures(ctx):
@@ -24,8 +25,8 @@ def sweep_temperatures(ctx):
 
 def sweep_conditions(ctx):
     ratio = common.setting(ctx, 'sweep', 'ratio', ctx.cfg.impurity_ratio)
-    cases = [ctx.cfg.reference_label] + common.impurity_labels(ctx, 'sweep')
-    return pd.DataFrame([common.fixed_probe_row(ctx, f'Tsweep r={ratio:.3g}', case, common.reference_point(ctx, T),
+    cases = common.sweep_cases(ctx, 'sweep')
+    return pd.DataFrame([common.fixed_probe_row(ctx, f'Tsweep r={C.ratio_tag(ratio)}', case, common.reference_point(ctx, T),
                                                 impurity_ratio=ratio)
                          for T in sweep_temperatures(ctx) for case in cases])
 
@@ -87,7 +88,7 @@ def run(ctx):
 def plot_temperature_sweep(ctx, sweep, release=None):
     cfg = ctx.cfg
     probe = probe_label(ctx.model)
-    cases = [cfg.reference_label] + common.impurity_labels(ctx, 'sweep')
+    cases = common.sweep_cases(ctx, 'sweep')
     colors = P.colors_for(cases, first=cfg.reference_label)
     fig, axes = plt.subplots(1, 3, figsize=(15, 4.4))
     for case in cases:
@@ -130,50 +131,7 @@ def plot_temperature_sweep(ctx, sweep, release=None):
 
 def plot_sweep_coverages(ctx, cov):
     """Stacked coverages against temperature, one bar per solved temperature and one panel per
-    case. Species keep the colors of the surface-composition figure where it ran in this
-    session; temperatures without a converged steady state are left out (gaps)."""
-    model, cfg, s = ctx.model, ctx.cfg, ctx.cfg.composition
-    site = model.site
-    base = ctx.outputs.get('composition', {}).get('colors')
-    named, colors = species_palette(cov, site, s, base)
-    cases = [c for c in [cfg.reference_label] + common.impurity_labels(ctx, 'sweep')
-             if c in set(cov.index.get_level_values('case'))]
-    temps = sweep_temperatures(ctx)
-    ncol = min(3, len(cases))
-    nrow = int(np.ceil(len(cases) / ncol))
-    width = 0.8 * (np.min(np.diff(temps)) if len(temps) > 1 else 50.0)
-    fig, axes = plt.subplots(nrow, ncol, figsize=(4.4 * ncol, 3.3 * nrow), sharex=True, sharey=True, squeeze=False)
-    layer_names = [site] + named + ['other']
-    for ax, case in zip(axes.flat, cases):
-        part = cov.xs(case, level='case').reindex(temps).dropna(how='all')   # solved temperatures only
-        stack = {site: part[site] if site in part else pd.Series(0.0, index=part.index), 'other':
-                 part.drop(columns=[site] + named, errors='ignore').sum(axis=1)}
-        stack.update({n: part[n] for n in named if n in part})
-        bottom = np.zeros(len(part))
-        for n in layer_names:                                     # one stacked bar per solved temperature
-            if n not in stack:
-                continue
-            vals = stack[n].to_numpy(dtype=float)
-            ax.bar(part.index, vals, bottom=bottom, width=width, color=colors.get(n, P.EMPTY_COLOR if n == site
-                   else P.OTHER_COLOR), edgecolor='white', linewidth=0.8)
-            bottom = bottom + vals
-        ax.set_ylim(0, 1)
-        ax.set_xlim(min(temps) - width, max(temps) + width)
-        P.style_axis(ax)
-        P.keep_title(ax, case)
-    for ax in axes.flat[len(cases):]:
-        ax.set_visible(False)
-    for ax in axes[:, 0]:
-        ax.set_ylabel('fraction of sites', fontsize=10, color=P.INK)
-    for j in range(ncol):                                         # x label under the lowest panel of each column
-        col = [axes[i][j] for i in range(nrow) if axes[i][j].get_visible()]
-        col[-1].set_xlabel('T (K)', fontsize=10, color=P.INK)
-        col[-1].xaxis.set_tick_params(labelbottom=True)
-    handles = [plt.Rectangle((0, 0), 1, 1, color=colors.get(n, P.EMPTY_COLOR if n == site else P.OTHER_COLOR))
-               for n in layer_names]                              # legend in stack order, top first
-    labels = ['empty site'] + [species_label(model, n) for n in named] + ['other']
-    fig.legend(handles[::-1], labels[::-1], loc='center left', bbox_to_anchor=(1.0, 0.5),
-               frameon=False, fontsize=9, title='Surface species', title_fontsize=9)
-    fig.suptitle('What covers the surface against temperature', x=0.01, ha='left', fontsize=11)
-    fig.tight_layout()
-    return fig
+    case (temperatures without a converged steady state are gaps)."""
+    cases = [c for c in common.sweep_cases(ctx, 'sweep') if c in set(cov.index.get_level_values('case'))]
+    return plot_coverage_bars(ctx, cov, cases, sweep_temperatures(ctx), 'T (K)',
+                              'What covers the surface against temperature')

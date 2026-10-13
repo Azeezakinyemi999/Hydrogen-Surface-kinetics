@@ -13,10 +13,12 @@ Temperature and pressure effects are kept apart: a **temperature series** (`temp
 | `steady_state` | forward/net probe TOF, coverages and poisoning factor for every case (probe gas only, each impurity, all together) and temperature, each from two starting surfaces |
 | `composition` | which species cover the surface |
 | `diagnostics` | binding enthalpies vs literature; what-if runs with a species switched off; main sources and sinks of a species |
-| `curves` | rate vs impurity level, and the level that halves the rate |
-| `sweep` | Arrhenius plot, apparent activation energy, the temperature at which poisoning lifts |
+| `convergence` | how the reactor method reached (or failed to reach) each steady state: coverages, TOF and residual against time |
+| `curves` | rate vs impurity level and the level that halves the rate; both branches where two steady states exist; the site-blocking split |
+| `sweep` | Arrhenius plot, apparent activation energy, the temperature at which poisoning lifts, surface coverage against T |
+| `pressure_sweep` | rate against H₂ pressure at fixed purity, its local slope, the half-rate pressure, surface coverage against p |
 | `orders` | reaction orders in the probe gas and the impurity |
-| `rate_control` | degree of rate control (DRC) and thermodynamic rate control (TRC) |
+| `rate_control` | thermodynamic rate control (TRC) and degree of rate control (DRC), one figure per (T, p) point |
 | `paths` | element-flux diagrams at a steady state |
 | `transients` | how fast a working catalyst is poisoned after an impurity arrives |
 | `flux` | flux-diagram videos of the RMG input's batch reactors (optional, needs RMG-Py) |
@@ -41,7 +43,10 @@ bash run.sh runs/ni_first_try check                 # settings, mechanism, both 
 bash run.sh runs/ni_first_try                       # every analysis listed in settings.py
 bash run.sh runs/ni_first_try --only curves,sweep   # a subset
 bash run.sh runs/ni_first_try status                # what is cached and saved
+bash run.sh runs/try_2/Cu runs/try_2/Fe runs/try_2/Ni   # several runs, one after another
 ```
+
+Give each run as its folder or its `settings.py` (globs such as `runs/try_*/Ni` work), then `check` or `status` if wanted, then options; the options apply to every run. A failed run does not stop the others, and a summary at the end lists any that failed.
 
 Tables (CSV) and figures (PNG, plus PDF in publication style) go to `runs/<name>/output/`, and the log to `runs/<name>/run.log`. Every solve is cached, so a rerun only solves what changed. `run.sh` keeps the Mac awake during long runs; the full Ni analysis takes about 2 hours on 8 cores the first time.
 
@@ -67,6 +72,7 @@ probe_gas = 'H2(6)'            # names as in the mechanism
 empty_site = 'site(10)'
 probe_adsorbate = 'HX(11)'     # the probe reaction  H2 + 2 site <=> 2 HX  is found automatically
 impurities = {'CO': {'C': 1, 'O': 1}, 'NH3': {'N': 1, 'H': 3}}   # by composition or by name
+impurity_ratio = 0.25                  # p(impurity)/p(H2); or one per impurity, e.g. {'CO': 1/190, 'NH3': 0.1/190}
 
 temperatures = [650.0, 800.0, 1000.0]   # temperature series (K), at reference_pressure
 reference_pressure = 1e5                # Pa

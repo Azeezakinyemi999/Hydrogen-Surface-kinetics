@@ -9,7 +9,8 @@ A point (T, P) that is in both is solved once and labeled 'both'.
 One row per (basis, case, point). Cases are the probe-gas-only reference, each impurity
 alone, and all impurities together. Two bases:
   fixed_probe : the probe-gas partial pressure is P and impurities are ADDED on top at
-                impurity_ratio x P (main analysis: probe-gas supply unchanged)
+                impurity_ratio x P, one ratio for all or one per impurity (main analysis:
+                probe-gas supply unchanged)
   input_X     : fixed mole fractions at total pressure P (probe gas diluted)
 
 The point's labels (P_ref_bar, series) are not physics: they stay out of the cache
@@ -61,17 +62,28 @@ def impurities_in(cfg, case):
     return [case]
 
 
+def ratio_for(ratio, label):
+    """p(impurity)/p(probe) of one impurity: `ratio` is one number for every impurity, or a
+    dict {impurity label: ratio} (e.g. the proportions of an RMG reactor's gas)."""
+    return float(ratio[label]) if isinstance(ratio, dict) else float(ratio)
+
+
+def ratio_tag(ratio):
+    """Short label of a ratio setting for condition names: '0.25', or 'per-impurity'."""
+    return 'per-impurity' if isinstance(ratio, dict) else f'{float(ratio):.3g}'
+
+
 def partial_pressures(model, case, basis, P_ref, ratio=None):
-    """{gas species: Pa} for one case. `ratio` (fixed_probe only) overrides cfg.impurity_ratio."""
+    """{gas species: Pa} for one case. `ratio` (fixed_probe only) overrides cfg.impurity_ratio;
+    either is one number or a dict {impurity label: ratio}."""
     cfg = model.cfg
     imps = impurities_in(cfg, case)
     if basis == 'fixed_probe':
         r = cfg.impurity_ratio if ratio is None else ratio
-        if case == cfg.mixture_label and cfg.mixture_mode == 'split':
-            r = r / len(imps)
+        split = case == cfg.mixture_label and cfg.mixture_mode == 'split'
         pp = {model.probe_gas: P_ref}
         for label in imps:
-            pp[model.impurities[label]] = r * P_ref
+            pp[model.impurities[label]] = ratio_for(r, label) / (len(imps) if split else 1) * P_ref
         return pp
     if basis == 'input_X':
         ib = cfg.input_basis

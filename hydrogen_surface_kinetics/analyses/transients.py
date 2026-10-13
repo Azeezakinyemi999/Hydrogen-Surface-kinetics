@@ -148,7 +148,8 @@ def run(ctx):
 
 
 def plot_poisoning_over_time(ctx, jobs, results, series='temperature'):
-    """Two rows (rate, impurity coverage) per point of the series, one column per impurity."""
+    """Two rows (rate, impurity coverage) and one column per (point, impurity): points down and
+    impurities across, or the other way round when there are more points than impurities."""
     s = ctx.cfg.transients
     probe = probe_label(ctx.model)
     shades = ['#9ec5f4', '#5598e7', '#256abf', '#0d366b', '#061b36']        # light -> dark = more impurity
@@ -158,11 +159,13 @@ def plot_poisoning_over_time(ctx, jobs, results, series='temperature'):
     if not pts:
         return None
     imps = [i for i in common.impurity_labels(ctx, 'transients') if any(j['row']['case'] == i for j in mine)]
-    fig, axes = plt.subplots(2 * len(pts), len(imps), figsize=(3.4 * len(imps), 5.6 * len(pts)),
-                             squeeze=False, sharex=True)
-    for ti, (T, Pb) in enumerate(pts):
-        for ci, imp in enumerate(imps):
-            ax_r, ax_c = axes[2 * ti][ci], axes[2 * ti + 1][ci]
+    by_point = len(imps) >= len(pts)          # the longer of points / impurities runs across the columns
+    pairs, ncol = (len(pts), len(imps)) if by_point else (len(imps), len(pts))
+    fig, axes = plt.subplots(2 * pairs, ncol, figsize=(3.4 * ncol, 5.6 * pairs), squeeze=False, sharex=True)
+    for pi, (T, Pb) in enumerate(pts):
+        for ii, imp in enumerate(imps):
+            r_, c_ = (pi, ii) if by_point else (ii, pi)
+            ax_r, ax_c = axes[2 * r_][c_], axes[2 * r_ + 1][c_]
             for job in mine:
                 r = job['row']
                 if r['T_K'] != T or job['_labels']['P_ref_bar'] != Pb or r['case'] != imp:
@@ -180,8 +183,8 @@ def plot_poisoning_over_time(ctx, jobs, results, series='temperature'):
                 ax.set_yscale('log')
             lo, hi = ax_r.get_ylim()
             ax_r.set_ylim(min(lo, 0.1), max(hi, 2.0))      # at least a decade: whole-decade ticks only
-            P.style_axis(ax_r, f'{imp}, {T:.0f} K, {Pb:g} bar', 'TOF / TOF(t=0)' if ci == 0 else '')
-            P.style_axis(ax_c, '', 'sites taken by impurity' if ci == 0 else '')
+            P.style_axis(ax_r, f'{imp}, {T:.0f} K, {Pb:g} bar', 'TOF / TOF(t=0)' if c_ == 0 else '')
+            P.style_axis(ax_c, '', 'sites taken by impurity' if c_ == 0 else '')
     fig.supxlabel('time after the impurity arrives (s)', fontsize=10, color=P.INK)
     handles, labels = axes[0][0].get_legend_handles_labels()
     fig.legend(handles, labels, title=f'p(impurity) / p({probe})', loc='upper center', bbox_to_anchor=(0.5, 1.03),

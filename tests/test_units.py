@@ -147,3 +147,22 @@ def test_flux_finds_rmg_files_next_to_settings(tmp_path):
     ctx = Context(hsk.Model(cfg), log=lambda *a: None)
     rmg_input, seed_dir = flux.default_rmg_files(ctx)
     assert rmg_input == str(tmp_path / 'input.py') and seed_dir == str(tmp_path / 'seed' / 'seed')
+
+
+def test_per_impurity_ratios(tmp_path):
+    m = hsk.Model(hsk.load_config(write_settings(tmp_path, TOY_SETTINGS, TWO_IMPURITIES
+                                                 + "impurity_ratio = {'I': 1 / 190, 'AI': 10 / 190}\n")))
+    df = C.main_conditions(m).set_index('case')
+    assert df.loc['I', 'X']['I'] == pytest.approx(1 / 191)            # each impurity alone at its own level
+    assert df.loc['AI', 'X']['AI'] == pytest.approx(10 / 200)
+    x = df.loc['both', 'X']                                           # the mixture is the reactor's gas
+    assert (x['A2'], x['I'], x['AI']) == pytest.approx((190 / 201, 1 / 201, 10 / 201))
+    assert df.loc['both', 'P_probe_bar'] == pytest.approx(1.0)        # H2 still at the point's pressure
+
+
+def test_per_impurity_ratio_errors(tmp_path):
+    with pytest.raises(hsk.ConfigError, match=r"no ratio for impurities \['AI'\]"):
+        hsk.load_config(write_settings(tmp_path, TOY_SETTINGS, TWO_IMPURITIES + "impurity_ratio = {'I': 0.1}\n"))
+    with pytest.raises(hsk.ConfigError, match="mixture_mode = 'split' needs one number"):
+        hsk.load_config(write_settings(tmp_path, TOY_SETTINGS, TWO_IMPURITIES
+                                       + "impurity_ratio = {'I': 0.1, 'AI': 0.2}\nmixture_mode = 'split'\n"))

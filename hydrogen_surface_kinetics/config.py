@@ -62,16 +62,30 @@ ANALYSIS_DEFAULTS = dict(
         top_n=5,
         **SERIES_DEFAULTS,          # points of the switch-off what-if
     ),
+    convergence=dict(
+        conditions=None,            # [(case, T) or (case, T, P Pa)]; None = the main conditions whose clean
+                                    #   start did not converge (or, if all did, the reference at the first point)
+        max_conditions=6,           # at most this many traces when conditions is None
+        per_decade=2,               # recorded checkpoints per decade (2 = the reactor method's own)
+    ),
     curves=dict(
         ratios=[1e-6, 3e-6, 1e-5, 3e-5, 1e-4, 3e-4, 1e-3, 3e-3, 1e-2, 3e-2, 0.1, 0.25],
         impurities=None,            # None = every impurity
+        blocking_point=None,        # (T K, P Pa) of the site-blocking figure; None = the first series point
         **SERIES_DEFAULTS,
     ),
     sweep=dict(
         temperatures=None,          # None = from the lowest to the highest main temperature in 50 K steps,
         step=50.0,                  #   always at reference_pressure (temperature only)
         ratio=None,                 # None = impurity_ratio
-        impurities=None,
+        impurities=None,            # None = every impurity, plus the all-impurities mixture
+    ),
+    pressure_sweep=dict(
+        pressures=None,             # Pa; None = a log grid over the pressure series (plus reference_pressure),
+        per_decade=2,               #   per_decade points; without a pressure series, 1/100 to 100 x reference
+        temperatures=None,          # None = pressure_temperatures
+        ratio=None,                 # None = impurity_ratio (each impurity keeps its ratio to the probe gas)
+        impurities=None,            # None = every impurity, plus the all-impurities mixture
     ),
     orders=dict(ratio=None, delta=0.10, impurities=None, **SERIES_DEFAULTS),
     rate_control=dict(
@@ -135,7 +149,8 @@ DEFAULTS = dict(
     reference_pressure=1e5,         # Pa: probe-gas partial pressure of the temperature series
     pressures=[],                   # pressure series (Pa, probe-gas partial pressure); [] = none
     pressure_temperatures=None,     # K: a pressure series at each; None = the lowest temperature
-    impurity_ratio=0.25,            # p(impurity) / p(probe gas), the same in both series
+    impurity_ratio=0.25,            # p(impurity) / p(probe gas), the same in both series: one number,
+                                    #   or {impurity label: ratio}, e.g. an RMG reactor's proportions
     mixture_mode='same_each',       # 'same_each' or 'split'
     include_input_basis=False,      # also run the fixed-mole-fraction basis
     input_basis=dict(single=dict(probe=0.8, impurity=0.2), mixture=dict(probe=0.75, each_impurity=0.05)),
@@ -222,6 +237,26 @@ def site_density_kmol_m2(spec):
     return float(value) * SITE_DENSITY_UNITS[unit]
 
 
+def ratio_problems(where, value, labels):
+    """A ratio is a non-negative number, or a dict with one non-negative number per impurity."""
+    def bad_number(v):
+        try:
+            return float(v) < 0
+        except (TypeError, ValueError):
+            return True
+    if isinstance(value, dict):
+        out = []
+        missing, extra = sorted(labels - set(value)), sorted(set(value) - labels)
+        if missing:
+            out.append(f"'{where}' has no ratio for impurities {missing}")
+        if extra:
+            out.append(f"'{where}' has ratios for unknown impurities {extra}")
+        if any(bad_number(v) for v in value.values()):
+            out.append(f"'{where}' ratios must be non-negative numbers")
+        return out
+    return [f"'{where}' must be a non-negative number or {{impurity label: ratio}}"] if bad_number(value) else []
+
+
 def check_config(cfg):
     problems = []
     for key in REQUIRED:
@@ -274,6 +309,13 @@ def check_config(cfg):
             cfg[name]['series'] = series
     if cfg.mixture_mode not in ('same_each', 'split'):
         problems.append("'mixture_mode' must be 'same_each' or 'split'")
+    labels = set(cfg.impurities) if isinstance(cfg.impurities, dict) else set()
+    for where, value in [('impurity_ratio', cfg.impurity_ratio)] + [
+            (f"{name}['ratio']", cfg[name].get('ratio')) for name in ANALYSIS_DEFAULTS if cfg[name].get('ratio') is not None]:
+        problems += ratio_problems(where, value, labels)
+        if isinstance(value, dict) and where == 'impurity_ratio' and cfg.mixture_mode == 'split':
+            problems.append("mixture_mode = 'split' needs one number for impurity_ratio (with one ratio per "
+                            "impurity, the mixture already has each impurity at its own level)")
     if cfg.expected_site_density is not None:
         spec = cfg.expected_site_density
         if not (isinstance(spec, (tuple, list)) and len(spec) == 2 and spec[1] in SITE_DENSITY_UNITS):

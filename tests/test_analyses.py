@@ -15,12 +15,14 @@ from conftest import TOY_SETTINGS, write_settings
 
 SMALL = """
 pressures = [3e4, 3e5]                # pressure series at 500 K: 0.3, 1 (shared) and 3 bar
-analyses = ['steady_state', 'composition', 'diagnostics', 'curves', 'sweep', 'orders',
-            'rate_control', 'paths', 'transients']
+analyses = ['steady_state', 'composition', 'diagnostics', 'convergence', 'curves', 'sweep', 'pressure_sweep',
+            'orders', 'rate_control', 'paths', 'transients']
 plot_style = 'publication'
 diagnostics = {'adsorption_checks': [('A2 -> 2 A*', {'A2': 1, 'S': 2}, {'A(s)': 2}, (-100, -60), 'made up')],
                'switch_off': 'I(ss)', 'top_reactions': [('I', 500.0, 'A(s)')]}
-curves = {'ratios': [1e-6, 1e-5, 1e-4, 1e-3]}
+curves = {'ratios': [1e-6, 1e-5, 1e-4, 1.585e-4, 1e-3]}   # 1.585e-4: the toy has two steady states there
+convergence = {'conditions': [('probe only', 500.0), ('I', 500.0, 3e5)]}
+pressure_sweep = {'pressures': [3e4, 1e5, 3e5, 1e6]}
 sweep = {'temperatures': [450.0, 500.0, 550.0]}
 rate_control = {'drc_top_n': 4}
 transients = {'ratios': [1e-5, 1e-3], 't_start': 1e-6, 't_stop': 1e2, 'per_decade': 2}
@@ -48,8 +50,10 @@ def test_files_written(ctx):
     names = ['steady_state_results.csv', 'mechanism_binding_check.csv', 'mechanism_switch_off.csv',
              'top_reactions.csv', 'poisoning_curves.csv', 'temperature_sweep.csv', 'reaction_orders.csv',
              'sensitivity.csv', 'poisoning_over_time.csv', 'binding_check.pdf', 'sweep_coverages.pdf',
-             'poisoning_tolerance.csv']
-    for stem in ('rates_summary', 'surface_composition', 'poisoning_curves', 'rate_control', 'poisoning_over_time'):
+             'poisoning_tolerance.csv', 'pressure_sweep.pdf', 'pressure_sweep.csv', 'half_rate_pressure.csv',
+             'pressure_sweep_coverages_500K.pdf', 'convergence.pdf', 'convergence.csv', 'site_blocking.pdf',
+             'rate_control_500K_0.3bar.pdf', 'rate_control_500K_1bar.pdf', 'rate_control_500K_3bar.pdf']
+    for stem in ('rates_summary', 'surface_composition', 'poisoning_curves', 'poisoning_over_time'):
         names += [f'{stem}_vs_T.pdf', f'{stem}_vs_P.pdf']                # one figure per series
     for name in names:
         assert os.path.exists(os.path.join(out, name)), name
@@ -112,3 +116,33 @@ def test_species_colors_follow_the_species(ctx):
     named, colors = species_palette(cov, ctx.model.site, ctx.cfg.composition, base)
     assert all(colors[sp] == base[sp] for sp in named if sp in base)
     assert len(set(colors.values())) == len(colors)            # no two species share a color
+
+
+def test_pressure_sweep(ctx):
+    ps = ctx.outputs['pressure_sweep']['sweep']
+    assert set(ps['P_ref_bar'].round(6)) == {0.3, 1.0, 3.0, 10.0} and set(ps['T_K']) == {500.0}
+    ref = ps[ps['case'] == 'probe only']
+    assert ref['converged'].all() and np.allclose(ref['poisoning_factor'], 1.0)
+    slope = ref['slope_dlnTOF_dlnp'].dropna()
+    assert len(slope) == 4 and ((slope > 0) & (slope <= 1.0 + 1e-6)).all()   # order in H2 of a 2-site step
+    imp = ps[ps['case'] == 'I']                                    # fixed purity: impurity scales with H2
+    assert np.allclose(imp['P_impurity_bar'] / imp['P_probe_bar'], 1e-5)
+
+
+def test_convergence(ctx):
+    out = ctx.outputs['convergence']
+    for res in out.values():
+        assert res['status'] == 'done' and res['accepted_s'] is not None
+        traj = res['trajectory']
+        at = traj[traj['t_s'] == res['accepted_s']].iloc[0]
+        assert at['residual_ok'] and at['plateau_ok'] and at['norm_residual'] < 1
+        assert traj['norm_residual'].iloc[0] > 1                    # far from steady state at 1e-8 s
+
+
+def test_two_branches_and_site_blocking(ctx):
+    c = ctx.outputs['curves']['curves']
+    two = c[c['starts_agree'] == False]                              # noqa: E712
+    assert len(two), 'the toy should have two steady states at ratio 1.585e-4'
+    assert (np.abs(np.log(two['poisoning_factor_B'] / two['poisoning_factor'])) > 0.1).all()
+    ok = c[c['converged'] & (c['case'] == 'I')]
+    assert np.allclose(ok['poisoning_factor'], ok['blocking_full'], rtol=1e-6)   # elementary step: blocking only
