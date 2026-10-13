@@ -1,14 +1,17 @@
-"""Poisoning over time (documentation: Stage 11f).
+"""Poisoning over time (documentation: Stage 11.6).
 
-Start from the steady state in the probe gas alone (a working catalyst), switch the gas to
-probe + impurity at t = 0, and follow the forward rate as the impurity builds up.
-Outputs: poisoning_over_time.csv, poisoning_over_time_trajectories.csv, poisoning_over_time.png.
+At every point of the temperature and pressure series: start from the steady state in the
+probe gas alone (a working catalyst), switch the gas to probe + impurity at t = 0, and
+follow the forward rate as the impurity builds up.
+Outputs: poisoning_over_time.csv, poisoning_over_time_trajectories.csv,
+poisoning_over_time_vs_T.png and, with a pressure series, poisoning_over_time_vs_P.png.
 """
 import cantera as ct
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+from .. import conditions as C
 from .. import plotting as P
 from .. import solver as S
 from ..labels import probe_label
@@ -73,16 +76,17 @@ def settle_time(traj, rtol=0.1):
     return traj['t_s'].iloc[last + 1] if last + 1 < len(traj) else np.nan
 
 
-def reference_start(ctx, T):
-    """Coverages of the probe-only steady state at T: from the main run if it has T."""
+def reference_start(ctx, pt):
+    """Coverages of the probe-only steady state at the point: from the main run if it has the
+    point, otherwise solved here."""
     cfg = ctx.cfg
-    if float(T) in cfg.temperatures:
-        summary = ctx.main()['summary']
-        hit = summary[(summary['basis'] == 'fixed_probe') & (summary['case'] == cfg.reference_label)
-                      & (summary['T_K'] == float(T))]
+    summary = ctx.main()['summary']
+    hit = summary[(summary['basis'] == 'fixed_probe') & (summary['case'] == cfg.reference_label)
+                  & (summary['T_K'] == pt['T']) & np.isclose(summary['P_ref_bar'].astype(float), pt['P'] / 1e5)]
+    if len(hit):
         res = ctx.main()['results'][hit['key'].iloc[0]]
     else:
-        conds = pd.DataFrame([common.fixed_probe_row(ctx, 'fixed_probe', cfg.reference_label, T)])
+        conds = pd.DataFrame([common.fixed_probe_row(ctx, 'fixed_probe', cfg.reference_label, pt)])
         res = next(iter(ctx.run_conditions(conds, prefix='').values()))
     return S.coverages_to_dict(ctx.model, res['theta_a']) if common.converged(res) else None
 
@@ -93,28 +97,29 @@ def run(ctx):
     tt = times(ctx)
     imps = common.impurity_labels(ctx, 'transients')
     jobs = []
-    for T in common.temperatures(ctx, 'transients'):
-        start = reference_start(ctx, T)
+    for pt in common.points(ctx, 'transients'):
+        start = reference_start(ctx, pt)
         if start is None:
-            ctx.log(f'  skipping {T:.0f} K: no converged {cfg.reference_label} steady state')
+            ctx.log(f'  skipping {common.point_name(pt)}: no converged {cfg.reference_label} steady state')
             continue
         for imp in imps:
             for ratio in s['ratios']:
-                row = common.fixed_probe_row(ctx, 'transient', imp, T, impurity_ratio=ratio, ratio=ratio)
-                jobs.append({'key': f'transient r={ratio:.3g} | {imp} | {T:.0f} K', 'row': row,
-                             'theta0': start, 'times': tt})
+                row = common.fixed_probe_row(ctx, 'transient', imp, pt, impurity_ratio=ratio, ratio=ratio)
+                key = f"transient r={ratio:.3g} | {imp} | {pt['T']:.0f} K | {pt['P'] / 1e5:g} bar"
+                jobs.append(common.job(key, row, theta0=start, times=tt))
     ctx.log(f'  {len(jobs)} transient runs')
     res_all = ctx.run_jobs(lambda job: run_transient(model, job), jobs, 'cache_transients',
                            describe=lambda res: res['error'] or '')
     rows, trajs = [], []
     for job in jobs:
-        res, r = res_all[job['key']], job['row']
-        out = {'T_K': r['T_K'], 'case': r['case'], 'ratio': r['ratio'],
-               'error': res.get('error') if res['status'] == 'done' else res['status']}
+        res = res_all[job['key']]
+        r = {**job['row'], **job['_labels']}
+        where = dict(series=r['series'], T_K=r['T_K'], P_ref_bar=r['P_ref_bar'], case=r['case'], ratio=r['ratio'])
+        out = {**where, 'error': res.get('error') if res['status'] == 'done' else res['status']}
         traj = res.get('trajectory')
         if traj is not None and len(traj):
             tof0 = res['tof0']
-            traj = traj.assign(T_K=r['T_K'], case=r['case'], ratio=r['ratio'])
+            traj = traj.assign(**where)
             res['trajectory'] = traj
             j = int(traj['tof_fwd'].to_numpy().argmin())
             out.update({'tof_t0': tof0, 'tof_end': traj['tof_fwd'].iloc[-1],
@@ -133,34 +138,40 @@ def run(ctx):
     ctx.log(summary.drop(columns=['top_species_end'], errors='ignore')
             .to_string(index=False, float_format=lambda v: f'{v:.3g}'))
     if trajs:
-        fig = plot_poisoning_over_time(ctx, jobs, res_all)
-        P.save(fig, ctx.path('poisoning_over_time.png'), cfg)
-        plt.close(fig)
+        for series in C.SERIES:
+            fig = plot_poisoning_over_time(ctx, jobs, res_all, series)
+            if fig is not None:
+                P.save(fig, ctx.path(common.series_file('poisoning_over_time', series)), cfg)
+                plt.close(fig)
     ctx.outputs['transients'] = {'results': res_all, 'summary': summary}
     return ctx.outputs['transients']
 
 
-def plot_poisoning_over_time(ctx, jobs, results):
+def plot_poisoning_over_time(ctx, jobs, results, series='temperature'):
+    """Two rows (rate, impurity coverage) per point of the series, one column per impurity."""
     s = ctx.cfg.transients
     probe = probe_label(ctx.model)
     shades = ['#9ec5f4', '#5598e7', '#256abf', '#0d366b', '#061b36']        # light -> dark = more impurity
-    ratiocolors = dict(zip(sorted(s['ratios']), shades if len(s['ratios']) <= len(shades) else P.SERIES_COLORS))
-    temps = sorted({j['row']['T_K'] for j in jobs})
-    imps = [i for i in common.impurity_labels(ctx, 'transients') if any(j['row']['case'] == i for j in jobs)]
-    fig, axes = plt.subplots(2 * len(temps), len(imps), figsize=(3.4 * len(imps), 5.6 * len(temps)),
+    ratio_colors = dict(zip(sorted(s['ratios']), shades if len(s['ratios']) <= len(shades) else P.SERIES_COLORS))
+    mine = [j for j in jobs if j['_labels']['series'] in (series, 'both')]
+    pts = sorted({(j['row']['T_K'], j['_labels']['P_ref_bar']) for j in mine})
+    if not pts:
+        return None
+    imps = [i for i in common.impurity_labels(ctx, 'transients') if any(j['row']['case'] == i for j in mine)]
+    fig, axes = plt.subplots(2 * len(pts), len(imps), figsize=(3.4 * len(imps), 5.6 * len(pts)),
                              squeeze=False, sharex=True)
-    for ti, T in enumerate(temps):
+    for ti, (T, Pb) in enumerate(pts):
         for ci, imp in enumerate(imps):
             ax_r, ax_c = axes[2 * ti][ci], axes[2 * ti + 1][ci]
-            for job in jobs:
+            for job in mine:
                 r = job['row']
-                if r['T_K'] != T or r['case'] != imp:
+                if r['T_K'] != T or job['_labels']['P_ref_bar'] != Pb or r['case'] != imp:
                     continue
                 res = results[job['key']]
                 traj = res.get('trajectory')
                 if traj is None or not len(traj):
                     continue
-                c = ratiocolors.get(r['ratio'], P.INK)
+                c = ratio_colors.get(r['ratio'], P.INK)
                 ax_r.plot(traj['t_s'], traj['tof_fwd'] / res['tof0'], color=c, lw=1.8, label=f"{r['ratio']:g}")
                 ax_c.plot(traj['t_s'], P.log_floor(traj['theta_impurity']), color=c, lw=1.8)
             ax_r.axhline(0.5, color=P.MUTED, lw=0.8, ls='--')
@@ -169,7 +180,7 @@ def plot_poisoning_over_time(ctx, jobs, results):
                 ax.set_yscale('log')
             lo, hi = ax_r.get_ylim()
             ax_r.set_ylim(min(lo, 0.1), max(hi, 2.0))      # at least a decade: whole-decade ticks only
-            P.style_axis(ax_r, f'{imp}, {T:.0f} K', 'TOF / TOF(t=0)' if ci == 0 else '')
+            P.style_axis(ax_r, f'{imp}, {T:.0f} K, {Pb:g} bar', 'TOF / TOF(t=0)' if ci == 0 else '')
             P.style_axis(ax_c, '', 'sites taken by impurity' if ci == 0 else '')
     fig.supxlabel('time after the impurity arrives (s)', fontsize=10, color=P.INK)
     handles, labels = axes[0][0].get_legend_handles_labels()

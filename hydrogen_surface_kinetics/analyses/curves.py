@@ -1,12 +1,15 @@
-"""Poisoning curves: rate vs impurity level (documentation: Stage 11a).
+"""Poisoning curves: rate vs impurity level (documentation: Stage 11.1).
 
-The probe-gas pressure stays fixed and each impurity is added at a ratio p(imp)/p(probe).
-Outputs: poisoning_curves.csv, poisoning_tolerance.csv, poisoning_curves.png.
+At every point of the temperature and pressure series, the probe-gas pressure stays at the
+point's value and each impurity is added at a ratio p(imp)/p(probe).
+Outputs: poisoning_curves.csv, poisoning_tolerance.csv, poisoning_curves_vs_T.png and,
+with a pressure series, poisoning_curves_vs_P.png.
 """
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+from .. import conditions as C
 from .. import plotting as P
 from ..labels import probe_label
 from . import common
@@ -15,11 +18,11 @@ from . import common
 def curve_conditions(ctx):
     s, ref = ctx.cfg.curves, ctx.cfg.reference_label
     rows = []
-    for T in common.temperatures(ctx, 'curves'):
-        rows.append(common.fixed_probe_row(ctx, 'curve r=0', ref, T, impurity_ratio=0.0, ratio=0.0))
+    for pt in common.points(ctx, 'curves'):
+        rows.append(common.fixed_probe_row(ctx, 'curve r=0', ref, pt, impurity_ratio=0.0, ratio=0.0))
         for imp in common.impurity_labels(ctx, 'curves'):
             for r in s['ratios']:
-                rows.append(common.fixed_probe_row(ctx, f'curve r={r:.3g}', imp, T, impurity_ratio=r, ratio=r))
+                rows.append(common.fixed_probe_row(ctx, f'curve r={r:.3g}', imp, pt, impurity_ratio=r, ratio=r))
     return pd.DataFrame(rows)
 
 
@@ -43,10 +46,10 @@ def run(ctx):
     conds = curve_conditions(ctx)
     results = ctx.run_conditions(conds, prefix='')
     df = common.results_frame(ctx, results, extra_cols=('ratio',))
-    df = common.add_poisoning(df, cfg.reference_label, ctx.model.probe_sites, by=('T_K',))
-    df = df.sort_values(['T_K', 'case', 'ratio']).reset_index(drop=True)
+    df = common.add_poisoning(df, cfg.reference_label, ctx.model.probe_sites, by=('T_K', 'P_ref_bar'))
+    df = df.sort_values(['T_K', 'P_ref_bar', 'case', 'ratio']).reset_index(drop=True)
     ctx.save_table(df, 'poisoning_curves.csv')
-    tol = (df[df['case'] != cfg.reference_label].groupby(['T_K', 'case'], sort=False)
+    tol = (df[df['case'] != cfg.reference_label].groupby(['series', 'T_K', 'P_ref_bar', 'case'], sort=False)
            .apply(half_poisoning_ratio, include_groups=False).reset_index())
     tol['ppm_of_probe'] = tol['ratio_at_half_rate'] * 1e6
     ctx.save_table(tol, 'poisoning_tolerance.csv')
@@ -54,23 +57,32 @@ def run(ctx):
             + tol.to_string(index=False, float_format=lambda v: f'{v:.3g}'))
     bad = common.problems(df)
     if len(bad):
-        ctx.log('  needs attention:\n' + bad[['T_K', 'case', 'ratio', 'converged', 'starts_agree']].to_string(index=False))
-    fig = plot_poisoning_curves(ctx, df, tol)
-    P.save(fig, ctx.path('poisoning_curves.png'), cfg)
-    plt.close(fig)
+        ctx.log('  needs attention:\n' + bad[['T_K', 'P_ref_bar', 'case', 'ratio', 'converged', 'starts_agree']]
+                .to_string(index=False))
+    for series in C.SERIES:
+        fig = plot_poisoning_curves(ctx, df, tol, series)
+        if fig is not None:
+            P.save(fig, ctx.path(common.series_file('poisoning_curves', series)), cfg)
+            plt.close(fig)
     ctx.outputs['curves'] = {'results': results, 'curves': df, 'tolerance': tol}
     return ctx.outputs['curves']
 
 
-def plot_poisoning_curves(ctx, curves, tolerance=None):
+def plot_poisoning_curves(ctx, curves, tolerance=None, series='temperature'):
+    """One row per point of the series: rate relative to the reference, and the sites the
+    impurity takes, against the impurity level."""
     cfg = ctx.cfg
     probe = probe_label(ctx.model)
     imps = common.impurity_labels(ctx, 'curves')
     colors = P.colors_for(imps)
-    temps = sorted(curves['T_K'].unique())
-    fig, axes = plt.subplots(len(temps), 2, figsize=(11, 3.9 * len(temps)), squeeze=False)
-    for row, T in zip(axes, temps):
-        part = curves[(curves['T_K'] == T) & (curves['case'] != cfg.reference_label)]
+    sub = C.in_series(curves, series)
+    pts = sub[['T_K', 'P_ref_bar']].drop_duplicates().sort_values(['T_K', 'P_ref_bar']).itertuples(index=False)
+    pts = list(pts)
+    if not pts:
+        return None
+    fig, axes = plt.subplots(len(pts), 2, figsize=(11, 3.9 * len(pts)), squeeze=False)
+    for row, (T, Pb) in zip(axes, pts):
+        part = sub[(sub['T_K'] == T) & (sub['P_ref_bar'] == Pb) & (sub['case'] != cfg.reference_label)]
         for imp in imps:
             d = part[(part['case'] == imp) & part['converged'].astype(bool)].sort_values('ratio')
             if d.empty:
@@ -81,13 +93,15 @@ def plot_poisoning_curves(ctx, curves, tolerance=None):
                 ax.plot(d['ratio'], y, '-o', color=colors[imp], ms=4.5, lw=1.6, label=imp)
                 ax.plot(d['ratio'].to_numpy()[two], y[two], 'o', ms=9, mfc='none', mec=P.INK, mew=1.2)
             if tolerance is not None:                     # interpolated half-rate level (not the bounds)
-                t = tolerance[(tolerance['T_K'] == T) & (tolerance['case'] == imp) & (tolerance['note'].fillna('') == '')]
+                t = tolerance[(tolerance['T_K'] == T) & (tolerance['P_ref_bar'] == Pb) & (tolerance['case'] == imp)
+                              & (tolerance['note'].fillna('') == '')]
                 if len(t) and np.isfinite(t['ratio_at_half_rate'].iloc[0]):
                     row[0].plot(t['ratio_at_half_rate'].iloc[0], 0.5, **P.HALF_MARK, mec=colors[imp])
         row[0].axhline(0.5, color=P.MUTED, lw=1, ls='--')
         row[0].text(min(cfg.curves['ratios']), 0.45, 'rate halved', color=P.MUTED, fontsize=8, ha='left', va='top')
-        P.style_axis(row[0], f'{T:.0f} K: forward {probe} dissociation rate', f'poisoning factor  TOF / TOF({cfg.reference_label})')
-        P.style_axis(row[1], f'{T:.0f} K: sites taken by the impurity', f'fraction of sites (not empty, {probe} or its adsorbates)')
+        name = f'{T:.0f} K, {Pb:g} bar'
+        P.style_axis(row[0], f'{name}: forward {probe} dissociation rate', f'poisoning factor  TOF / TOF({cfg.reference_label})')
+        P.style_axis(row[1], f'{name}: sites taken by the impurity', f'fraction of sites (not empty, {probe} or its adsorbates)')
         for ax in row:
             ax.set_xscale('log')
             ax.set_yscale('log')

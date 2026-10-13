@@ -1,5 +1,6 @@
 """Temperature sweep: Arrhenius plot, apparent activation energy, release temperature
-(documentation: Stage 11b). Outputs: temperature_sweep.csv, release_temperature.csv,
+(documentation: Stage 11.2). Always at reference_pressure: it is the fine-grained
+temperature series (pressure_sweep is its pressure counterpart). Outputs: temperature_sweep.csv, release_temperature.csv,
 temperature_sweep.png, and sweep_coverages.png (what covers the surface against T).
 """
 import cantera as ct
@@ -24,7 +25,8 @@ def sweep_temperatures(ctx):
 def sweep_conditions(ctx):
     ratio = common.setting(ctx, 'sweep', 'ratio', ctx.cfg.impurity_ratio)
     cases = [ctx.cfg.reference_label] + common.impurity_labels(ctx, 'sweep')
-    return pd.DataFrame([common.fixed_probe_row(ctx, f'Tsweep r={ratio:.3g}', case, T, impurity_ratio=ratio)
+    return pd.DataFrame([common.fixed_probe_row(ctx, f'Tsweep r={ratio:.3g}', case, common.reference_point(ctx, T),
+                                                impurity_ratio=ratio)
                          for T in sweep_temperatures(ctx) for case in cases])
 
 
@@ -60,7 +62,7 @@ def run(ctx):
     ctx.log('\n== sweep: temperature sweep ==')
     results = ctx.run_conditions(sweep_conditions(ctx), prefix='')
     df = common.results_frame(ctx, results)
-    df = common.add_poisoning(df, cfg.reference_label, ctx.model.probe_sites, by=('T_K',))
+    df = common.add_poisoning(df, cfg.reference_label, ctx.model.probe_sites, by=('T_K', 'P_ref_bar'))
     df = apparent_activation_energy(df.sort_values(['case', 'T_K']).reset_index(drop=True))
     ctx.save_table(df, 'temperature_sweep.csv')
     rel = (df[df['case'] != cfg.reference_label].groupby('case', sort=False)
@@ -74,7 +76,7 @@ def run(ctx):
     fig = plot_temperature_sweep(ctx, df, rel)
     P.save(fig, ctx.path('temperature_sweep.png'), cfg)
     plt.close(fig)
-    cov = coverage_table(ctx, results).droplevel('basis')
+    cov = coverage_table(ctx, results).droplevel(['basis', 'series', 'P_ref_bar'])
     fig = plot_sweep_coverages(ctx, cov)
     P.save(fig, ctx.path('sweep_coverages.png'), cfg)
     plt.close(fig)

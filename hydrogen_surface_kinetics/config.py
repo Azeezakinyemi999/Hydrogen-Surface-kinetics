@@ -37,6 +37,16 @@ RUN_DEFAULTS = dict(
     recompute=False,                # True = ignore cached results
 )
 
+# Point-based analyses run on the temperature series and/or the pressure series. Each can
+# narrow them: None = the main settings of the same name.
+SERIES_DEFAULTS = dict(
+    series=None,                    # None = ['temperature', 'pressure']; or one of them
+    temperatures=None,              # temperature series of this analysis (K)
+    pressures=None,                 # pressure series of this analysis (Pa)
+    pressure_temperatures=None,     # temperatures at which its pressure series runs (K)
+)
+SERIES_NAMES = ('temperature', 'pressure')
+
 # One section per analysis. None = take it from the main settings (see each module).
 ANALYSIS_DEFAULTS = dict(
     composition=dict(
@@ -48,42 +58,44 @@ ANALYSIS_DEFAULTS = dict(
         adsorption_checks=[],       # (label, {reactants}, {products}, (lit. dH lo, hi) kJ/mol, note)
         switch_off=None,            # species whose reactions are switched off in a what-if; None = molecular_adsorbate
         switch_off_cases=None,      # cases for the what-if; None = reference + every impurity
-        top_reactions=[],           # (case, T, species): largest sources/sinks of that species
+        top_reactions=[],           # (case, T, species) or (case, T, P, species): largest sources/sinks
         top_n=5,
+        **SERIES_DEFAULTS,          # points of the switch-off what-if
     ),
     curves=dict(
         ratios=[1e-6, 3e-6, 1e-5, 3e-5, 1e-4, 3e-4, 1e-3, 3e-3, 1e-2, 3e-2, 0.1, 0.25],
-        temperatures=None,          # None = the main temperatures
         impurities=None,            # None = every impurity
+        **SERIES_DEFAULTS,
     ),
     sweep=dict(
-        temperatures=None,          # None = from the lowest to the highest main temperature in 50 K steps
-        step=50.0,
+        temperatures=None,          # None = from the lowest to the highest main temperature in 50 K steps,
+        step=50.0,                  #   always at reference_pressure (temperature only)
         ratio=None,                 # None = impurity_ratio
         impurities=None,
     ),
-    orders=dict(temperatures=None, ratio=None, delta=0.10, impurities=None),
+    orders=dict(ratio=None, delta=0.10, impurities=None, **SERIES_DEFAULTS),
     rate_control=dict(
-        temperatures=None,
         cases=None,                 # None = reference + every impurity
         ratio=None,
         drc_delta=0.05,             # relative change of each screened reaction's rate constants
         drc_top_n=20,               # reactions screened, by |net rate| at the base steady state
         trc_delta=1.0e6,            # J/kmol (1 kJ/mol) change of a species' free energy
         trc_min_coverage=1e-3,      # species screened for TRC (plus the role species)
+        **SERIES_DEFAULTS,
     ),
     paths=dict(
-        conditions=None,            # [(case, T), ...]; None = every main case at the lowest temperature
+        conditions=None,            # [(case, T) or (case, T, P), ...]; None = every case at every series point
         elements=None,              # None = the elements of the probe gas
         threshold=1e-8,             # hide fluxes below this fraction of the largest
         flow_type='OneWayFlow',     # 'OneWayFlow' (needed near equilibrium) or 'NetFlow'
         formats=['png'],            # Graphviz output formats, e.g. ['png', 'pdf']
+        **SERIES_DEFAULTS,
     ),
     transients=dict(
-        temperatures=None,
         impurities=None,
         ratios=[1e-6, 1e-4, 1e-2, 0.25],
         t_start=1e-9, t_stop=1e8, per_decade=4,   # s: recording times
+        **SERIES_DEFAULTS,
     ),
     # Optional, needs RMG-Py (+ RDKit, Graphviz, ffmpeg): flux-diagram videos of the RMG
     # input file's own batch reactors. Paths are relative to settings.py.
@@ -118,12 +130,12 @@ DEFAULTS = dict(
     # impurities: label -> species name, or elemental composition dict
     impurities={},
     mixture_label='all',            # case name of all impurities together; None = no mixture case
-    # operating conditions
-    temperatures=[300.0],
-    pressure_mode='fixed',          # 'fixed' or 'input'
-    reference_pressure=1e5,         # Pa, probe-gas partial pressure in 'fixed' mode
-    input_pressures={},             # {T: Pa} in 'input' mode
-    impurity_ratio=0.25,            # p(impurity) / p(probe gas) on the fixed-probe basis
+    # operating conditions: two separate series, so temperature and pressure effects never mix
+    temperatures=[300.0],           # temperature series (K), at reference_pressure
+    reference_pressure=1e5,         # Pa: probe-gas partial pressure of the temperature series
+    pressures=[],                   # pressure series (Pa, probe-gas partial pressure); [] = none
+    pressure_temperatures=None,     # K: a pressure series at each; None = the lowest temperature
+    impurity_ratio=0.25,            # p(impurity) / p(probe gas), the same in both series
     mixture_mode='same_each',       # 'same_each' or 'split'
     include_input_basis=False,      # also run the fixed-mole-fraction basis
     input_basis=dict(single=dict(probe=0.8, impurity=0.2), mixture=dict(probe=0.75, each_impurity=0.05)),
@@ -139,6 +151,11 @@ DEFAULTS = dict(
 DICT_SECTIONS = ('solver', 'run', 'input_basis', *ANALYSIS_DEFAULTS)
 PATH_KEYS = ('mechanism', 'output_dir')
 REQUIRED = ('mechanism', 'probe_gas', 'empty_site', 'probe_adsorbate')
+REMOVED = {
+    'pressure_mode': "removed: temperature and pressure are separate series now. Use temperatures + "
+                     "reference_pressure (temperature series) and pressures + pressure_temperatures (pressure series)",
+    'input_pressures': "removed with pressure_mode (it tied a pressure to each temperature)",
+}
 SITE_DENSITY_UNITS = {'mol/cm2': 10.0, 'mol/m2': 1e-3, 'kmol/m2': 1.0}   # factor to kmol/m2
 
 
@@ -228,13 +245,33 @@ def check_config(cfg):
     except (TypeError, ValueError):
         problems.append("'temperatures' must be a non-empty list of numbers (K)")
         temps = []
-    if cfg.pressure_mode not in ('fixed', 'input'):
-        problems.append("'pressure_mode' must be 'fixed' or 'input'")
-    elif cfg.pressure_mode == 'input':
-        missing = [t for t in temps if t not in {float(k) for k in cfg.input_pressures}]
-        if missing:
-            problems.append(f"'input_pressures' has no entry for T = {missing}")
-        cfg['input_pressures'] = {float(k): float(v) for k, v in cfg.input_pressures.items()}
+    for key, why in REMOVED.items():
+        if key in cfg:
+            problems.append(f"'{key}' {why}")
+    for key, unit in (('pressures', 'Pa'), ('pressure_temperatures', 'K')):
+        if cfg.get(key) is None:
+            continue
+        try:
+            values = [float(v) for v in cfg[key]]
+            if any(v <= 0 for v in values):
+                raise ValueError
+            cfg[key] = values
+        except (TypeError, ValueError):
+            problems.append(f"'{key}' must be a list of positive numbers ({unit})")
+    try:
+        cfg['reference_pressure'] = float(cfg.reference_pressure)
+    except (TypeError, ValueError):
+        problems.append("'reference_pressure' must be a number (Pa)")
+    if cfg.get('pressure_temperatures') is None and temps:
+        cfg['pressure_temperatures'] = [min(temps)]
+    for name in ANALYSIS_DEFAULTS:
+        series = cfg[name].get('series')
+        if series is not None:
+            series = [series] if isinstance(series, str) else list(series)
+            bad = [x for x in series if x not in SERIES_NAMES]
+            if bad:
+                problems.append(f"'{name}': unknown series {bad}; choose from {list(SERIES_NAMES)}")
+            cfg[name]['series'] = series
     if cfg.mixture_mode not in ('same_each', 'split'):
         problems.append("'mixture_mode' must be 'same_each' or 'split'")
     if cfg.expected_site_density is not None:

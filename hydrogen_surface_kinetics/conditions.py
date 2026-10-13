@@ -1,18 +1,49 @@
-"""Operating conditions (documentation: Stage 2).
+"""Operating conditions (documentation: Stage 3).
 
-One row per (basis, case, temperature). Cases are the probe-gas-only reference, each
-impurity alone, and all impurities together. Two bases:
-  fixed_probe : the probe-gas partial pressure is held at the reference pressure and
-                impurities are ADDED on top (main analysis: probe-gas supply unchanged)
-  input_X     : fixed mole fractions at the reference total pressure (probe gas diluted)
+Temperature and pressure are varied separately, never together:
+  temperature series : every T in `temperatures`, at `reference_pressure`
+  pressure series    : every P in `pressures` (plus reference_pressure, so the series
+                       meet), at each T in `pressure_temperatures`
+A point (T, P) that is in both is solved once and labeled 'both'.
+
+One row per (basis, case, point). Cases are the probe-gas-only reference, each impurity
+alone, and all impurities together. Two bases:
+  fixed_probe : the probe-gas partial pressure is P and impurities are ADDED on top at
+                impurity_ratio x P (main analysis: probe-gas supply unchanged)
+  input_X     : fixed mole fractions at total pressure P (probe gas diluted)
+
+The point's labels (P_ref_bar, series) are not physics: they stay out of the cache
+fingerprint, so relabeling a point never forces it to be solved again.
 """
 import numpy as np
 import pandas as pd
 
+SERIES = ('temperature', 'pressure')
+LABEL_COLUMNS = ('P_ref_bar', 'series')
 
-def reference_pressure(cfg, T):
-    """Pa: probe-gas partial pressure (fixed_probe) or total pressure (input_X) at T."""
-    return cfg.reference_pressure if cfg.pressure_mode == 'fixed' else cfg.input_pressures[float(T)]
+
+def series_points(cfg, series=None, temperatures=None, pressures=None, pressure_temperatures=None):
+    """[{'T': K, 'P': Pa, 'series': 'temperature' | 'pressure' | 'both'}], temperature series
+    first (by T), then each pressure series (by T, then P). None = the main settings."""
+    series = list(SERIES) if series is None else ([series] if isinstance(series, str) else list(series))
+    temps = [float(t) for t in (cfg.temperatures if temperatures is None else temperatures)]
+    pres = [float(p) for p in (cfg.pressures if pressures is None else pressures)]
+    p_temps = [float(t) for t in (cfg.pressure_temperatures if pressure_temperatures is None else pressure_temperatures)]
+    P_ref = float(cfg.reference_pressure)
+    tags = {}
+    if 'temperature' in series:
+        for T in temps:
+            tags.setdefault((T, P_ref), set()).add('temperature')
+    if 'pressure' in series and pres:
+        for T in p_temps:
+            for P in sorted(set(pres) | {P_ref}):
+                tags.setdefault((T, P), set()).add('pressure')
+    return [{'T': T, 'P': P, 'series': 'both' if len(t) == 2 else next(iter(t))} for (T, P), t in tags.items()]
+
+
+def in_series(df, name):
+    """Rows of a results table that belong to one series ('both' counts for either)."""
+    return df[df['series'].isin([name, 'both'])]
 
 
 def case_labels(cfg):
@@ -66,17 +97,31 @@ def condition_row(model, basis, case, T, pp):
             'X': {sp: p / P_total for sp, p in pp.items()}}
 
 
+def point_row(model, basis, case, point, pp, **extra):
+    """A condition row with the point's labels (see LABEL_COLUMNS)."""
+    row = condition_row(model, basis, case, point['T'], pp)
+    row.update(extra)
+    row.update({'P_ref_bar': point['P'] / 1e5, 'series': point['series']})
+    return row
+
+
 def main_conditions(model):
-    """The main conditions table: every case at every temperature, on each basis."""
+    """The main conditions table: every case at every series point, on each basis."""
     cfg = model.cfg
     bases = ['fixed_probe'] + (['input_X'] if cfg.include_input_basis else [])
-    rows = [condition_row(model, basis, case, T, partial_pressures(model, case, basis, reference_pressure(cfg, T)))
-            for basis in bases for T in cfg.temperatures for case in case_labels(cfg)]
+    rows = [point_row(model, basis, case, pt, partial_pressures(model, case, basis, pt['P']))
+            for basis in bases for pt in series_points(cfg) for case in case_labels(cfg)]
     df = pd.DataFrame(rows)
     assert all(np.isclose(sum(x.values()), 1.0) for x in df['X'])
     return df
 
 
+def split_labels(row):
+    """(physics, labels): the part of a row that is hashed into the cache key, and the rest."""
+    physics = {k: v for k, v in row.items() if k not in LABEL_COLUMNS}
+    return physics, {k: row[k] for k in LABEL_COLUMNS if k in row}
+
+
 def condition_key(row):
-    """Readable name for one condition, e.g. 'fixed_probe | CO | 700 K'."""
-    return f"{row['basis']} | {row['case']} | {row['T_K']:.0f} K"
+    """Readable name for one condition, e.g. 'fixed_probe | CO | 700 K | 1 bar'."""
+    return f"{row['basis']} | {row['case']} | {row['T_K']:.0f} K | {row['P_ref_bar']:g} bar"

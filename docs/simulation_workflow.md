@@ -38,7 +38,7 @@ How the `hydrogen_surface_kinetics` package simulates a surface reaction mechani
   [Stage 11: Further analyses](#stage-11-further-analyses)
 - **Part IV. Practical**
   [Running an analysis](#running-an-analysis) ·
-  [Writing an input.py](#writing-an-inputpy) ·
+  [Writing a settings.py](#writing-a-settingspy) ·
   [Troubleshooting](#troubleshooting) ·
   [Reproducibility checklist](#reproducibility-checklist) ·
   [Code map](#code-map) ·
@@ -151,19 +151,19 @@ flowchart TD
 | Stage | Purpose | Main inputs | Main outputs | Code |
 |---|---|---|---|---|
 | 0 | Check the files belong together | RMG job directory | a verified set of files | manual; `Model` checks the site density |
-| 1 | Load the model, find the probe reaction | Cantera YAML, `input.py` roles | `Model` | `model.py` |
+| 1 | Load the model, find the probe reaction | Cantera YAML, `settings.py` roles | `Model` | `model.py` |
 | 2 | Batch simulation and flux diagrams | YAML, seed, dictionary, RMG `input.py` | frames and a video per reactor | `analyses/flux.py` (optional) |
-| 3 | Define the gas environments | `input.py` conditions | conditions table | `conditions.py` |
+| 3 | Define the gas environments: a temperature series and a pressure series | `settings.py` conditions | conditions table | `conditions.py` |
 | 4 | Solve one steady state | T, P, mole fractions, start surface | coverages and diagnostics | `solver.py`: `set_state` … `solve_steady_state` |
 | 5 | Two starting surfaces per condition | one condition | two solutions, agreement flag | `solver.py`: `solve_condition` |
 | 6 | Run every condition in parallel, cached | conditions table | results, cache files | `runner.py`; `solver.run_conditions` |
 | 7 | Rates and poisoning metrics | results | `steady_state_results.csv` | `analyses/steady_state.py`, `analyses/common.py` |
 | 8 | Surface composition | results | coverage tables, bar chart | `analyses/composition.py` |
-| 9 | Rate plots | summary table | `rates_summary.png` | `analyses/steady_state.py` |
+| 9 | Rate plots | summary table | `rates_summary_vs_T.png`, `_vs_P.png` | `analyses/steady_state.py` |
 | 10 | Mechanism diagnostics | mechanism, results | binding check, what-if runs, traces | `analyses/diagnostics.py` |
 | 11 | Further analyses | the Stage 4–6 solver, results | poisoning curves, temperature sweep, orders, rate control, path diagrams, transients | `analyses/curves.py` … `analyses/transients.py` |
 
-Paths are inside the package folder `hydrogen_surface_kinetics/`; the [Code map](#code-map) lists every file. Each analysis is chosen by its name in `analyses = [...]` ([Running an analysis](#running-an-analysis)).
+Paths are inside the package folder `hydrogen_surface_kinetics/`; the [Code map](#code-map) lists every file. Each analysis is chosen by its name in `analyses = [...]` of the run's `settings.py` ([Running an analysis](#running-an-analysis)). The RMG input of a run is also called `input.py`; in this document `input.py` always means RMG's file, and `settings.py` the package's.
 
 ## 1.4 Model assumptions and limits
 
@@ -369,9 +369,9 @@ Cantera species names are RMG labels with the RMG index appended, `label(index)`
 - Outputs: a `Model` holding `gas` (a Cantera `Solution`), `surf` (an `Interface`), the index and direction of the probe and molecular-adsorption reactions, and the impurity species names.
 - Code: `model.py`: `Model`, `find_role_reaction`, `Model._resolve_gas`.
 
-**Concepts.** The roles are declared in the run's `input.py`, and the `Model` finds the rest:
+**Concepts.** The roles are declared in the run's `settings.py`, and the `Model` finds the rest:
 
-| Role | Symbol here | `input.py` setting | `Model` attribute | Found by |
+| Role | Symbol here | `settings.py` setting | `Model` attribute | Found by |
 |---|---|---|---|---|
 | probe gas | A₂ | `probe_gas` | `probe_gas` | name |
 | empty site | ∗ | `empty_site` | `site` | name |
@@ -381,7 +381,7 @@ Cantera species names are RMG labels with the RMG index appended, `label(index)`
 | molecular adsorption, A₂ + ∗ ⇌ A₂∗ | $R_m$ | none | `i_molec`, `sign_molec` | `find_role_reaction` |
 | impurities | I₁, I₂, … | `impurities` (label → name or composition) | `impurities` | name, or elemental composition |
 
-Nothing in the code is specific to one mechanism: a new mechanism needs only a new `input.py` ([Writing an input.py](#writing-an-inputpy)).
+Nothing in the code is specific to one mechanism: a new mechanism needs only a new `settings.py` ([Writing a settings.py](#writing-a-settingspy)).
 
 **Procedure.**
 
@@ -408,7 +408,7 @@ Nothing in the code is specific to one mechanism: a new mechanism needs only a n
 **Purpose.** Re-run, with Cantera, the reactor conditions the mechanism was generated for, and animate which species-to-species pathways carry flux over time.
 
 **At a glance.**
-- Inputs: Cantera YAML, seed `reactions.py` and `dictionary.txt`, `input.py`, structure images (optional).
+- Inputs: Cantera YAML, seed `reactions.py` and `dictionary.txt`, the RMG `input.py`, structure images (optional). By default the RMG `input.py` and `seed/seed` (or `seed`) next to `settings.py` are used.
 - Outputs: for each reactor, a folder `output/flux/<n>/` with frames `flux_diagram_XXXX.dot` and `.png` and a video `flux_diagram.avi`; missing structure images drawn into `output/flux_species/` (or `flux['species_dir']`).
 - Code: `analyses/flux.py` (`load_seed`, `build_matched_model`, `mol_from_pt_smiles`, `draw_species_images`, `reaction_index`, `simulate`, `condition_label`, `bake_condition_label`, `run`) and RMG's `rmgpy.tools.fluxdiagram.generate_flux_diagram`. Optional: it is the only part that needs RMG-Py, and it runs only when named (`--only flux`).
 
@@ -481,35 +481,46 @@ with $x = C_k(t)/\max_{k,t} C$ for node borders and $x = \lvert R_{ab}(t)\rvert 
 
 ## Stage 3: Designing the operating conditions
 
-**Purpose.** Define the gas environments at which steady states are computed, so that the effect of impurities can be separated from other changes.
+**Purpose.** Define the gas environments at which steady states are computed, so that the effect of impurities can be separated from other changes, and the effect of temperature from that of pressure.
 
 **At a glance.**
-- Inputs: the role names and the condition settings of `input.py` (`temperatures`, `pressure_mode`, `reference_pressure`, `input_pressures`, `impurity_ratio`, `mixture_mode`, `include_input_basis`, `input_basis`).
-- Output: the conditions table, one row per (basis, case, T), with total pressure (`P_total_bar`), probe-gas and impurity partial pressures (`P_probe_bar`, `P_impurity_bar`), and the mole-fraction dictionary `X`.
-- Code: `conditions.py`: `main_conditions`, `partial_pressures`, `reference_pressure`, `case_labels`, `condition_key`.
+- Inputs: the role names and the condition settings of `settings.py` (`temperatures`, `reference_pressure`, `pressures`, `pressure_temperatures`, `impurity_ratio`, `mixture_mode`, `include_input_basis`, `input_basis`).
+- Output: the conditions table, one row per (basis, case, point), with total pressure (`P_total_bar`), probe-gas and impurity partial pressures (`P_probe_bar`, `P_impurity_bar`), the mole-fraction dictionary `X`, and the point's labels `P_ref_bar` and `series`.
+- Code: `conditions.py`: `series_points`, `main_conditions`, `partial_pressures`, `point_row`, `case_labels`, `condition_key`.
 
 **Concepts.**
 
+*Two separate series.* Temperature and pressure are never varied together:
+
+| Series | What varies | What is held fixed | Settings |
+|---|---|---|---|
+| temperature | $T$ over `temperatures` | $p_{A_2} = $ `reference_pressure` | `temperatures`, `reference_pressure` |
+| pressure | $p_{A_2}$ over `pressures` | $T$, one series at each of `pressure_temperatures` | `pressures`, `pressure_temperatures` (default: the lowest temperature) |
+
+Every pressure series also contains `reference_pressure`, so the two series meet. A point $(T, p)$ in both is solved once and labeled `both`; a point is never a combination that neither series asked for, so there is no $T \times p$ grid. `pressures = []` means no pressure series. With 4 temperatures and 3 pressures at 2 temperatures, for example, there are $4 + 2\times3 - 2 = 8$ points, not 12.
+
 *Cases*: probe gas only (the reference, named by `reference_label`), each impurity alone (named by its label in `impurities`), and all impurities together (named by `mixture_label`; only with two or more impurities). Partial pressures are $p_k = x_k P$.
 
-*Fixed probe-gas pressure* (basis `fixed_probe`, the main analysis). The probe gas keeps the same partial pressure in every case and impurities are added on top:
+*Fixed probe-gas pressure* (basis `fixed_probe`, the main analysis). At each point the probe gas has the point's partial pressure in every case, and impurities are added on top at a fixed ratio to it:
 
-$$p_{A_2} = P_{\mathrm{ref}}(T), \qquad p_{I_j} = r\,p_{A_2}\ \ \text{for each impurity in the case}, \qquad P = p_{A_2} + \sum_j p_{I_j}, \qquad x_k = \frac{p_k}{P}.$$
+$$p_{A_2} = p_{\mathrm{point}}, \qquad p_{I_j} = r\,p_{A_2}\ \ \text{for each impurity in the case}, \qquad P = p_{A_2} + \sum_j p_{I_j}, \qquad x_k = \frac{p_k}{P}.$$
 
-With `mixture_mode = 'split'`, each impurity in the mixture gets $r/N_I$ instead of $r$.
+Along the pressure series the impurity therefore keeps the same purity ($r$ = `impurity_ratio`), and every partial pressure scales together. With `mixture_mode = 'split'`, each impurity in the mixture gets $r/N_I$ instead of $r$.
 
-*Fixed mole fractions* (basis `input_X`, a check). Mole fractions are taken from `input_basis` (by default those of the RMG reactor definitions: 0.8/0.2 for a single impurity, 0.75 + 0.05 each in the mixture, renormalized), at total pressure $P_{\mathrm{ref}}(T)$, so $p_{A_2} = x_{A_2}P_{\mathrm{ref}}$ and adding an impurity dilutes the probe gas. The ratio $\mathrm{TOF}(\texttt{input\_X})/\mathrm{TOF}(\texttt{fixed\_probe})$ for the same case and temperature isolates that dilution effect.
+*Fixed mole fractions* (basis `input_X`, a check). Mole fractions are taken from `input_basis` (by default those of the RMG reactor definitions of the first Ni run: 0.8/0.2 for a single impurity, 0.75 + 0.05 each in the mixture, renormalized), at total pressure $P = p_{\mathrm{point}}$, so $p_{A_2} = x_{A_2}P$ and adding an impurity dilutes the probe gas. The ratio $\mathrm{TOF}(\texttt{input\_X})/\mathrm{TOF}(\texttt{fixed\_probe})$ for the same case and point isolates that dilution effect.
 
-*Pressure mode*: `fixed` uses the same $P_{\mathrm{ref}}$ (`reference_pressure`) at every temperature, so temperature and pressure effects are not mixed; `input` takes the temperature-linked pressures in `input_pressures` (for example those of the reactor definitions).
+*Labels are not physics.* `P_ref_bar` and `series` describe where a point sits in the study. They are kept out of the cache fingerprint (Stage 6), so adding a temperature to the pressure series, for instance, relabels an existing point from `temperature` to `both` without solving it again.
 
-**Procedure.** For each basis, temperature and case: compute partial pressures, total pressure and mole fractions. Assert that the mole fractions sum to 1 and that the probe gas is present.
+**Procedure.** Build the series points; for each basis, point and case compute partial pressures, total pressure and mole fractions. Assert that the mole fractions sum to 1 and that the probe gas is present.
 
 **Design choices.**
-- **Fixed probe pressure as the main basis**, so any change in the probe rate comes from the impurity.
+- **Separate series instead of a grid**, so every comparison changes one thing: along the temperature series only $T$, along a pressure series only $p$. The earlier option of temperature-linked pressures (`pressure_mode = 'input'`) mixed the two and was removed.
+- **Fixed probe pressure as the main basis**, so any change in the probe rate at a point comes from the impurity.
+- **Fixed impurity ratio along the pressure series**, so the gas has the same purity at every pressure.
 - **`mixture_mode = 'same_each'` by default**, so the mixture can be compared directly with the worst single impurity.
 - **High impurity ratios by default** make effects clear; trace levels belong in poisoning curves ([Stage 11.1](#111-poisoning-curves)).
 
-**Checks and failure modes.** The assertions above; `input.py` is checked before anything runs (for example, every temperature needs an entry in `input_pressures` in `input` mode). Turning on `include_input_basis` doubles the number of conditions.
+**Checks and failure modes.** The assertions above; `settings.py` is checked before anything runs, and setting the removed `pressure_mode` or `input_pressures` stops with a message saying what replaces them. Turning on `include_input_basis` doubles the number of conditions.
 
 ## Stage 4: Steady-state solver
 
@@ -518,7 +529,7 @@ With `mixture_mode = 'split'`, each impurity in the mixture gets $r/N_I$ instead
 **At a glance.**
 - Inputs: $T$, $P$, mole fractions $x$, starting coverages $\theta^0$.
 - Outputs: $\theta$ (an array in `surf.species_names` order) and `info` (the method that succeeded, convergence diagnostics, every attempt).
-- Code: `model.py`: `Model.new_surface`, `Model.probe_rates`; `solver.py`: `set_state`, `check_convergence`, `method_direct`, `fixed_gas_reactor`, `method_reactor`, `solve_steady_state`, `describe`. Every setting comes from the `solver` section of `input.py` ([Appendix B](#b-settings-reference)).
+- Code: `model.py`: `Model.new_surface`, `Model.probe_rates`; `solver.py`: `set_state`, `check_convergence`, `method_direct`, `fixed_gas_reactor`, `method_reactor`, `solve_steady_state`, `describe`. Every setting comes from the `solver` section of `settings.py` ([Appendix B](#b-settings-reference)).
 
 ```mermaid
 flowchart TD
@@ -697,7 +708,7 @@ flowchart TD
 4. Save each finished result immediately.
 5. Print the status table, and a list of conditions that need attention (not done, not converged, or starts disagreeing).
 
-**The fingerprint.** Each cache file is named `<job key>_<fingerprint>.pkl` (the key made file-safe, e.g. `fixed_probe__CO__300_K_…`). The fingerprint is the first 12 hexadecimal digits of an MD5 hash of everything that affects the answer: the job itself (gas state, and any rate multipliers, enthalpy shifts or starting surface), every `solver` setting, the phase names, the SHA-256 checksum of the mechanism file, and the Cantera version. Floats are rounded to 12 significant digits and dictionaries sorted first, so equal settings always give equal fingerprints. Changing any of these gives a new fingerprint, so the job is solved again; old files are ignored, not deleted.
+**The fingerprint.** Each cache file is named `<job key>_<fingerprint>.pkl` (the key made file-safe, e.g. `fixed_probe_CO_300_K_1_bar_…`). The fingerprint is the first 12 hexadecimal digits of an MD5 hash of everything that affects the answer: the job itself (gas state, and any rate multipliers, enthalpy shifts or starting surface), every `solver` setting, the phase names, the SHA-256 checksum of the mechanism file, and the Cantera version. Floats are rounded to 12 significant digits and dictionaries sorted first, so equal settings always give equal fingerprints. Changing any of these gives a new fingerprint, so the job is solved again; old files are ignored, not deleted. Job fields whose name starts with `_` (the point labels `P_ref_bar` and `series`) are not hashed.
 
 **Design choices.**
 - **Processes, not threads.** Cantera's C++ solvers cannot be interrupted from Python, so terminating a process is the only reliable time limit. Processes also isolate crashes.
@@ -722,7 +733,7 @@ flowchart TD
 
 1. For each converged condition, rebuild its state from start A's solution: a fresh surface, the gas, and the solved coverages. Nothing is solved here.
 2. Read the forward, reverse and net TOF of the probe reaction (direction-corrected) and of molecular adsorption; the net consumption of probe gas per site; $\theta_\ast$, $\theta_{A\ast}$ and $\theta_{A_2\ast}$; the site-count factor $f$; and the three most abundant surface species.
-3. Join the reference condition (probe gas only, same basis and temperature) and compute the poisoning factor, the slowdown and the site-blocking columns.
+3. Join the reference condition (probe gas only, same basis and point: same $T$ and $p$) and compute the poisoning factor, the slowdown and the site-blocking columns.
 4. List conditions that are not converged, whose starts disagree, or whose site-blocking check differs from 1 by more than $10^{-6}$.
 
 **Concepts.**
@@ -757,15 +768,15 @@ The code computes the first two factors as `blocking_from_theta`, and `blocking_
 
 **At a glance.**
 - Inputs: the summary table and the results.
-- Outputs: `steady_state_coverages.csv`, `steady_state_surface_species.csv`, `surface_composition.png`.
+- Outputs: `steady_state_coverages.csv`, `steady_state_surface_species.csv`, `surface_composition_vs_T.png` and (with a pressure series) `surface_composition_vs_P.png`.
 - Code: `analyses/composition.py`: `coverage_table`, `surface_species`, `plot_surface_composition`; `labels.py`: `species_label`.
 
 **Procedure.**
 
 1. Build a coverage matrix: one row per (basis, T, case), one column per surface species whose coverage is non-zero anywhere.
 2. List every species above `composition['min_listed']` ($10^{-3}$) for each condition.
-3. **Readable labels.** Use the `species_labels` dictionary of `input.py` where an entry exists. Otherwise build one automatically: "empty site" for the empty site; for others the formula (C, H, N and O first, then other elements alphabetically; site atoms left out), one `*` per occupied site, and the mechanism number, because isomers share a formula.
-4. **Stacked bars**: one panel per temperature and one bar per case. Segments are empty sites (pale neutral); then up to `composition['max_named']` (7) species that reach `composition['min_plotted']` (2 %) anywhere, ordered by peak coverage with a fixed color each; then everything else as "other".
+3. **Readable labels.** Use the `species_labels` dictionary of `settings.py` where an entry exists. Otherwise build one automatically: "empty site" for the empty site; for others the formula (C, H, N and O first, then other elements alphabetically; site atoms left out), one `*` per occupied site, and the mechanism number, because isomers share a formula.
+4. **Stacked bars**: one bar per case and one panel per point: for the temperature series a panel per $T$, for the pressure series a row per pressure-series temperature and a panel per $p$. Segments are empty sites (pale neutral); then up to `composition['max_named']` (7) species that reach `composition['min_plotted']` (2 %) anywhere, ordered by peak coverage with a fixed color each; then everything else as "other".
 
 **Design choices.** The same species keeps the same color in every panel, and in the coverage-against-temperature figure of Stage 11.2 (`composition.species_palette`: colors follow the species, not its rank). Empty sites are neutral so they read as "nothing here". The thresholds keep the legend short.
 
@@ -775,10 +786,10 @@ The code computes the first two factors as `blocking_from_theta`, and `blocking_
 
 **At a glance.**
 - Input: the summary table.
-- Outputs: `rates_summary.png`, plus printed tables.
+- Outputs: `rates_summary_vs_T.png`, `rates_summary_vs_P.png` (with a pressure series), plus printed tables.
 - Code: `analyses/steady_state.py`: `plot_rates`; `plotting.py`: `style_axis`, `save`. With both bases, `basis_comparison.csv`.
 
-**Procedure.** Three panels share the case axis: (a) the forward probe TOF (log scale), (b) the slowdown relative to the probe-gas-only case (log scale, with a "no effect" line at 1), and (c) the fraction of empty sites $\theta_\ast$ (linear). Each temperature has its own marker shape and color, offset side by side. In panel (b), open markers show the slowdown if the site count were fixed:
+**Procedure.** Three panels share the case axis: (a) the forward probe TOF (log scale), (b) the slowdown relative to the probe-gas-only case (log scale, with a "no effect" line at 1), and (c) the fraction of empty sites $\theta_\ast$ (linear). In the temperature-series figure each temperature has its own marker shape and color, offset side by side; in the pressure-series figure each pressure does, with one row of panels per pressure-series temperature. In panel (b), open markers show the slowdown if the site count were fixed:
 
 $$\text{slowdown}_{\text{fixed sites}} = \text{slowdown}\times\left(\frac{f}{f_{\mathrm{ref}}}\right)^{n}.$$
 
@@ -862,7 +873,7 @@ Report the results with their caveats listed; or run what-if sensitivity tests t
 **At a glance.**
 - Inputs: the solver of Stages 4–6, and the solved main results (11.5 and 11.6 start from them).
 - Outputs: one CSV per analysis (listed in [Appendix C](#c-output-files)), plots, and path diagrams.
-- Code: one module per analysis in `analyses/`, each with a `run(ctx)` and a settings section of the same name in `input.py`. An analysis that needs the main steady states runs `steady_state` first if it has not run yet (from the cache, if it is there).
+- Code: one module per analysis in `analyses/`, each with a `run(ctx)` and a settings section of the same name in `settings.py`. An analysis that needs the main steady states runs `steady_state` first if it has not run yet (from the cache, if it is there).
 
 | Analysis | Name in `analyses` | Solves | Reuses |
 |---|---|---|---|
@@ -877,7 +888,7 @@ Report the results with their caveats listed; or run what-if sensitivity tests t
 - **Impurity level** is the ratio $r = p_I/p_{A_2}$ on the fixed-probe-pressure basis of Stage 3: $p_{A_2}$ stays at $P_{\mathrm{ref}}(T)$ and the impurity is added on top.
 - **Unique condition labels.** Each analysis builds its own conditions table and gives every row a distinct `basis` label (e.g. `curve r=1e-06`, `Tsweep r=0.25`, `order probe+`). `condition_key()` (basis | case | T) must be unique: the runner refuses duplicate keys. The cache files cannot collide, because their fingerprints include the full gas state.
 - **Reference rate.** Each analysis that reports a poisoning factor computes its own probe-gas-only reference at the same temperature and $p_{A_2}$.
-- **Default temperatures.** Each analysis uses the main `temperatures` unless its section sets its own (the sweep defaults to the main range in 50 K steps). Restrict them to where the mechanism is trusted (Stage 10), as the Ni input does with 300 K.
+- **Both series by default.** Every point-based analysis (curves, orders, rate control, transients, paths, the switch-off what-if) runs at every point of both series, and draws one figure per series (`…_vs_T`, `…_vs_P`). Its section can narrow that with `series` (`'temperature'` or `'pressure'`) and its own `temperatures`, `pressures` and `pressure_temperatures` (each `None` = the main setting). Restrict them to where the mechanism is trusted (Stage 10), as `runs/ni_first_try` does with 300 K. The temperature sweep (11.2) is the fine-grained temperature series, always at `reference_pressure`.
 - **Default impurity level.** `impurity_ratio`, unless the section sets `ratio`.
 
 ### 11.1 Poisoning curves
@@ -926,7 +937,7 @@ for the probe gas and, in impurity cases, for the impurity.
 - order ≈ −2 in the impurity and ≈ +1 in the probe gas when the impurity controls the empty sites ($\theta_\ast \propto 1/p_I$, squared): the signature of a strongly adsorbed poison;
 - values in between when both share the surface.
 
-**Figure.** The orders are drawn in the bottom panel of `rate_control.png` (Stage 11.4), one marker per case and pressure (● probe gas, ■ impurity), labeled where $|n_j| \ge 0.1$.
+**Figure.** The orders are drawn in the bottom panels of `rate_control_vs_T.png` / `_vs_P.png` (Stage 11.4), one marker per case and pressure (● probe gas, ■ impurity), labeled where $|n_j| \ge 0.1$.
 
 **Details.** The step must be large enough that the rate change exceeds the solver's tolerance on the TOF ($\varepsilon_{\mathrm{TOF}} = 10^{-4}$ for the reactor method): with $\delta$ = 0.1 the logarithmic span is 0.2, so the error in $n_j$ is about $10^{-3}$. The flag `all_starts_agree` is True only if every perturbed point agreed between its two starts.
 
@@ -965,7 +976,7 @@ Together these give exactly the intended changes. For reactions with $n$ as a re
 
 So every perturbed solve starts from a **clean surface with the normal method choice**, exactly like its base solve. This is slower, but correct: from a clean start the plateau test only passes once the slow species have settled.
 
-**Figure** (`rate_control.png`, "what controls the rate"): top, the TRC of the forward probe rate, one panel per (T, case), species with $|X_{\mathrm{TRC}}| \ge 0.01$, with the sum in the axis label; bottom, the reaction orders of Stage 11.3 at the same temperatures, if that analysis ran (in the same session, or earlier: then its `reaction_orders.csv` is used). For a probe step that needs $n$ empty sites, with adsorbates in equilibrium with the gas, $X_{\mathrm{TRC},i} \approx -n\,\theta_i$, so the values add up to about $-n(1-\theta_\ast)$: whichever species holds the sites controls the rate, in proportion to how many it holds. DRC is not drawn: it is reported in the table, and usually sits entirely on the probe step.
+**Figure** (`rate_control_vs_T.png` / `_vs_P.png`, "what controls the rate"): top, the TRC of the forward probe rate, one panel per (point, case), species with $|X_{\mathrm{TRC}}| \ge 0.01$, with the sum in the axis label; bottom, the reaction orders of Stage 11.3 at the same points, if that analysis ran (in the same session, or earlier: then its `reaction_orders.csv` is used). For a probe step that needs $n$ empty sites, with adsorbates in equilibrium with the gas, $X_{\mathrm{TRC},i} \approx -n\,\theta_i$, so the values add up to about $-n(1-\theta_\ast)$: whichever species holds the sites controls the rate, in proportion to how many it holds. DRC is not drawn: it is reported in the table, and usually sits entirely on the probe step.
 
 **Code.** `analyses/rate_control.py`: `drc_reactions`, `trc_species`, `trc_multipliers`, `plot_rate_control`, `run`. Each perturbed solve is a job with its own `multipliers` and `h_shifts`, which are part of its cache fingerprint (`output/cache_sensitivity/`).
 
@@ -985,7 +996,7 @@ So every perturbed solve starts from a **clean surface with the normal method ch
 
 **What it does.** Answers how fast a working catalyst is poisoned, rather than where it ends up:
 
-1. Start from the **probe-gas-only steady state** at the same temperature (from the main results, or solved first if that temperature is not a main one): a catalyst running in clean gas.
+1. Start from the **probe-gas-only steady state** at the same point (from the main results, or solved first if the point is not a main one): a catalyst running in clean gas.
 2. At $t = 0$, switch the gas to probe gas + impurity at level $r$.
 3. Integrate the fixed-gas surface (the huge-volume reactor of Stage 4, gas reactions off) and record the state on a logarithmic time grid (default $10^{-9}$–$10^{8}$ s, four points per decade: `t_start`, `t_stop`, `per_decade`). Code: `analyses/transients.py`: `run_transient`, `crossing_time`, `settle_time`.
 
@@ -1026,17 +1037,17 @@ The analyses of this stage run many solves, often for tens of minutes. Time limi
 
 ## Running an analysis
 
-Every run lives in its own folder with an `input.py` (`runs/<name>/input.py`). Outputs go to `runs/<name>/output/` (or `output_dir`). From the repository folder:
+Every run lives in its own folder with a `settings.py` (`runs/<name>/settings.py`), which can sit next to the RMG files of the same run (`chem_annotated.yaml`, RMG's `input.py`, `seed/`). Outputs go to `runs/<name>/output/` (or `output_dir`). From the repository folder:
 
 ```bash
-bash run.sh runs/ni_first_try check                    # load the input and mechanism, list the conditions (seconds)
-bash run.sh runs/ni_first_try                          # every analysis listed in input.py
+bash run.sh runs/ni_first_try check                    # settings, mechanism, both series, solves per analysis (seconds)
+bash run.sh runs/ni_first_try                          # every analysis listed in settings.py
 bash run.sh runs/ni_first_try --only curves,sweep      # a subset (always run in the fixed order below)
 bash run.sh runs/ni_first_try --workers 4 --recompute  # fewer processes; ignore the cache
 bash run.sh runs/ni_first_try status                   # what is cached and saved
 ```
 
-`run.sh` keeps the Mac awake (`caffeinate -dims`), sets one thread per worker, uses the `rmg4.0` Python (or `$PYTHON`), and appends everything to `runs/<name>/run.log` with start and end times and the exit status. Under the hood it calls `python -m hydrogen_surface_kinetics check|run|status <input.py>`, which works without `run.sh` too.
+`run.sh` keeps the Mac awake (`caffeinate -dims`), sets one thread per worker, uses the `rmg4.0` Python (or `$PYTHON`), and appends everything to `runs/<name>/run.log` with start and end times and the exit status. Under the hood it calls `python -m hydrogen_surface_kinetics check|run|status <settings.py>`, which works without `run.sh` too.
 
 **From a notebook** (`notebooks/analyze.ipynb` is a ready-made front end):
 
@@ -1044,7 +1055,7 @@ bash run.sh runs/ni_first_try status                   # what is cached and save
 import hydrogen_surface_kinetics as hsk
 from hydrogen_surface_kinetics import analyses
 
-cfg = hsk.load_config('runs/ni_first_try/input.py', curves={'ratios': [1e-4, 1e-2]})  # overrides merge into sections
+cfg = hsk.load_config('runs/ni_first_try/settings.py', curves={'ratios': [1e-4, 1e-2]})  # overrides merge into sections
 ctx = analyses.run(cfg, only='steady_state')           # returns a Context
 analyses.run(ctx=ctx, only=['curves', 'orders'])       # more analyses on the same loaded model
 ctx.outputs['curves']['tolerance']                     # every table is a DataFrame in ctx.outputs
@@ -1052,18 +1063,18 @@ ctx.outputs['curves']['tolerance']                     # every table is a DataFr
 
 The command line and the notebook share the cache: whatever one solved, the other loads.
 
-**Which analyses.** `analyses = [...]` in `input.py` chooses them; `--only` (command line) or `only=` (Python) overrides that list for one run. They always run in this order: `steady_state`, `composition`, `diagnostics`, `curves`, `sweep`, `orders`, `rate_control`, `paths`, `transients`, `flux`. `flux` (Stage 2) needs RMG-Py and is not run unless named.
+**Which analyses.** `analyses = [...]` in `settings.py` chooses them; `--only` (command line) or `only=` (Python) overrides that list for one run. They always run in this order: `steady_state`, `composition`, `diagnostics`, `curves`, `sweep`, `orders`, `rate_control`, `paths`, `transients`, `flux`. `flux` (Stage 2) needs RMG-Py and is not run unless named.
 
-**How long.** For the 196-species Ni mechanism on 8 workers, the full list (without `flux`) took about 2 hours from scratch: main steady states 10 min, curves 20 min, sweep 45 min, orders 10 min, rate control 25 min, the rest a few minutes. Rerunning from the cache takes a few minutes, mostly for recomputing rates from the stored coverages. `flux` takes about 2 minutes per reactor at `n_points = 12`, longer at the default 100.
+**How long.** `check` lists, for every chosen analysis, the number of points and solves and how many are already cached, before anything runs (exact for the main conditions, curves, sweep and orders; an estimate for rate control and transients, whose job lists depend on solved states). Rate control dominates: about 50 solves per case and point. For the 196-species Ni mechanism on 8 workers, the full list (without `flux`) took about 2 hours from scratch: main steady states 10 min, curves 20 min, sweep 45 min, orders 10 min, rate control 25 min, the rest a few minutes. Rerunning from the cache takes a few minutes, mostly for recomputing rates from the stored coverages. `flux` takes about 2 minutes per reactor at `n_points = 12`, longer at the default 100.
 
-## Writing an input.py
+## Writing a settings.py
 
-An `input.py` is plain Python: every top-level name is a setting, anything left out takes the default of [Appendix B](#b-settings-reference), and dictionary sections (`solver`, `run`, one per analysis) only need the keys they change. Paths are relative to the file. Names starting with `_` are ignored, so they can hold helper values. The input is checked before anything runs, and every problem is reported at once.
+A `settings.py` is plain Python: every top-level name is a setting, anything left out takes the default of [Appendix B](#b-settings-reference), and dictionary sections (`solver`, `run`, one per analysis) only need the keys they change. Paths are relative to the file. Names starting with `_` are ignored, so they can hold helper values. The settings are checked before anything runs, and every problem is reported at once. Pointing the package at an RMG `input.py` by mistake stops with a message.
 
 A minimal input:
 
 ```python
-mechanism = '../../../Surface-Impurity-Effect/rmg_runs/Ni/first_try_saved/chem_annotated.yaml'
+mechanism = 'chem_annotated.yaml'               # relative to settings.py
 expected_site_density = (3.148e-9, 'mol/cm2')   # from the RMG input; catches unit errors in the export
 
 probe_gas = 'H2(6)'                 # species names as in the mechanism
@@ -1075,9 +1086,12 @@ reference_label = 'H2 only'
 impurities = {'CO': {'C': 1, 'O': 1},     # by elemental composition (robust to renumbering) ...
               'NH3': 'NH3(4)'}            # ... or by name
 
-temperatures = [300.0, 700.0]
+temperatures = [650.0, 800.0, 1000.0]   # temperature series (K), at reference_pressure
+reference_pressure = 1e5                # Pa
+pressures = [1e3, 1e5, 1e7]             # pressure series (Pa) ...
+pressure_temperatures = [650.0]         # ... at each of these temperatures
 analyses = ['steady_state', 'composition', 'curves']
-curves = {'temperatures': [300.0]}        # only what differs from the defaults
+curves = {'series': 'temperature'}      # only what differs from the defaults
 ```
 
 For a new mechanism, metal or impurity set:
@@ -1085,15 +1099,15 @@ For a new mechanism, metal or impurity set:
 1. **Mechanism and site density.** `mechanism`, `gas_phase`/`surface_phase` if the phases are not named `gas`/`surface`, and `expected_site_density` from the RMG input ([Stage 0](#stage-0-inputs-and-consistency-checks)).
 2. **Roles.** `probe_gas`, `empty_site`, `probe_adsorbate`, and `molecular_adsorbate` if there is one. `bash run.sh runs/<name> check` shows the probe reaction it found and the number of sites $n$.
 3. **Impurities.** A label for each (it becomes the case name), with a species name or a composition; `mixture_label` for all of them together (`None` for no mixture case).
-4. **Conditions.** `temperatures`, `pressure_mode` with `reference_pressure` or `input_pressures`, `impurity_ratio`, `mixture_mode`.
+4. **Conditions.** The temperature series (`temperatures` at `reference_pressure`), the pressure series (`pressures` at each of `pressure_temperatures`; `[]` for none), `impurity_ratio`, `mixture_mode`. Keep both inside the range the mechanism was generated for (the RMG reactor conditions).
 5. **Readable names.** `probe_label` and `species_labels` for plots and tables.
 6. **Diagnostics.** `diagnostics['adsorption_checks']` with literature ranges for the key adsorptions, and `top_reactions` for species worth tracing.
-7. **Analysis grids.** Restrict `curves`, `sweep`, `orders`, `rate_control`, `paths` and `transients` to the temperatures where the mechanism is trusted.
+7. **Analysis series.** Every point-based analysis runs on both series; narrow `curves`, `orders`, `rate_control`, `paths` and `transients` with their own `series`, `temperatures`, `pressures` or `pressure_temperatures` where needed (`check` shows the cost).
 8. **Tolerances.** Keep the `solver` defaults; change them only with evidence from Stage 4's tests.
 9. **Output.** `plot_style = 'publication'` for journal figures (vector PDF plus 600 dpi PNG, `publication_width_cm` wide); `'screen'` for slides.
 10. **Environment.** If the Cantera version changed, run `docs/figures/check_equations.py`.
 
-`runs/ni_first_try/input.py` is a complete example with every analysis configured.
+`runs/ni_first_try/settings.py` is a complete example with every analysis configured (temperature series only). `runs/try_*/<metal>/settings.py` are examples with both series, written next to their RMG files.
 
 ## Troubleshooting
 
@@ -1114,7 +1128,9 @@ For a new mechanism, metal or impurity set:
 | Batch far slower than expected, load ≫ number of cores | numerical libraries start several threads per worker | use `run.sh`, or import the package before NumPy so its one-thread defaults apply |
 | `KeyError: 'X'` when re-solving from the summary table | the summary has no mole-fraction column | take the row from the results: `ctx.outputs['steady_state']['results'][key]['row']` |
 | A condition is solved again although a cache file exists | the fingerprint changed (a solver setting, the mechanism file's contents, or the Cantera version) | expected; `--recompute` forces a full re-run |
-| `error: problems in …/input.py:` | a setting is missing, misspelled or of the wrong type | the message lists every problem; unknown keys in a section are reported by name |
+| `error: problems in …/settings.py:` | a setting is missing, misspelled or of the wrong type | the message lists every problem; unknown keys in a section are reported by name |
+| `… looks like an RMG input file` | the RMG `input.py` was given instead of `settings.py` | give the run's `settings.py` (`run.sh` uses it automatically) |
+| `'pressure_mode' removed` | an old settings file | use `temperatures` + `reference_pressure` and `pressures` + `pressure_temperatures` ([Stage 3](#stage-3-designing-the-operating-conditions)) |
 | `No module named hydrogen_surface_kinetics` | the package is not installed in this environment | `pip install --no-deps -e .` in the repository, with that environment's pip |
 | A flux reactor reports `worker closed the pipe without a result` | a worker was forked after RDKit/Cairo drawing (macOS) | Stage 2 runs reactors in the main process; do not run it through `run_jobs` |
 | `status` lists results "not converged" | conditions with no steady state within `reactor_t_max` (e.g. slow conversions) | a result, not an error ([Stage 11.2](#112-temperature-sweep)); they appear as gaps |
@@ -1126,7 +1142,7 @@ For a new mechanism, metal or impurity set:
 
 ## Reproducibility checklist
 
-- Keep the run's `input.py` under version control with the package; record the package commit (`git log -1`).
+- Keep the run's `settings.py` under version control with the package; record the package commit (`git log -1`).
 - `check` and the start of every run print the mechanism summary; the cache fingerprints include the mechanism's SHA-256 checksum and the Cantera version, so a changed file or version is never mixed with old results.
 - Keep the `output/cache*/` folders with the outputs: they reproduce every table in minutes.
 - Re-run `docs/figures/check_equations.py` after upgrading Cantera, and `python -m pytest` after changing the package.
@@ -1139,9 +1155,9 @@ All code is in the package folder `hydrogen_surface_kinetics/`.
 
 | File | Role | Stages |
 |---|---|---|
-| `config.py` | reads and checks `input.py`; every default (`SOLVER_DEFAULTS`, `RUN_DEFAULTS`, `ANALYSIS_DEFAULTS`, `DEFAULTS`) | all |
+| `config.py` | reads and checks `settings.py`; every default (`SOLVER_DEFAULTS`, `RUN_DEFAULTS`, `ANALYSIS_DEFAULTS`, `DEFAULTS`) | all |
 | `model.py` | `Model`: loads the phases, checks the site density, finds the roles and the probe reaction; fresh surface objects with multipliers and enthalpy shifts | 1 |
-| `conditions.py` | the main conditions table: cases, bases, partial pressures | 3 |
+| `conditions.py` | the temperature and pressure series, the main conditions table: cases, bases, partial pressures | 3 |
 | `solver.py` | fixed-gas steady state (direct and reactor methods, convergence test), two starting surfaces, `run_conditions`, `status_table` | 4–6 |
 | `runner.py` | forked worker pool with time limits and the per-job cache | 6 |
 | `labels.py` | readable species names and formulas | 8 |
@@ -1153,6 +1169,7 @@ All code is in the package folder `hydrogen_surface_kinetics/`.
 | `analyses/curves.py`, `sweep.py`, `orders.py`, `rate_control.py`, `paths.py`, `transients.py` | the further analyses | 11.1–11.6 |
 | `analyses/flux.py` | flux-diagram videos of the RMG reactors (optional, needs RMG-Py) | 2 |
 | `analyses/__init__.py` | `run()`: runs the chosen analyses in order | all |
+| `analyses/plan.py` | solves per analysis and how many are cached, for `check` | all |
 | `cli.py`, `__main__.py` | `python -m hydrogen_surface_kinetics check/run/status` | all |
 
 Around the package:
@@ -1160,7 +1177,7 @@ Around the package:
 | File | Role |
 |---|---|
 | `run.sh` | runs one run folder: keeps the Mac awake, one thread per worker, logs to `run.log` |
-| `runs/<name>/input.py` | one run's settings; its outputs go to `runs/<name>/output/` |
+| `runs/<name>/settings.py` | one run's settings (next to the run's RMG files, if any); its outputs go to `runs/<name>/output/` |
 | `notebooks/analyze.ipynb` | notebook front end: one section per analysis, settings editable per cell |
 | `tests/` | `pytest` suite on the toy mechanism (`tests/data/toy_mechanism.yaml`) |
 | `docs/figures/toy_mechanism.yaml` | the fictitious toy mechanism behind the figures |
@@ -1228,15 +1245,15 @@ Done since the notebook version: one thread per worker; a content checksum of th
 
 ## B. Settings reference
 
-Every setting of `input.py`, with its default (from `config.py`). Dictionary sections list their keys.
+Every setting of `settings.py`, with its default (from `config.py`). Dictionary sections list their keys.
 
 **Files and roles**
 
 | Setting | Default | Stage | Meaning |
 |---|---|---|---|
-| `mechanism` | required | 1 | Cantera YAML (relative to `input.py`) |
+| `mechanism` | required | 1 | Cantera YAML (relative to `settings.py`) |
 | `gas_phase`, `surface_phase` | `'gas'`, `'surface'` | 1 | phase names in the YAML |
-| `output_dir` | `'output'` | all | relative to `input.py` |
+| `output_dir` | `'output'` | all | relative to `settings.py` |
 | `expected_site_density` | `None` | 1 | `(value, unit)`, unit `'mol/cm2'`, `'mol/m2'` or `'kmol/m2'`; checked with relative tolerance $10^{-3}$ |
 | `probe_gas`, `empty_site`, `probe_adsorbate` | required | 1 | A₂, ∗, A∗ (species names) |
 | `molecular_adsorbate` | `None` | 1 | A₂∗ |
@@ -1249,11 +1266,11 @@ Every setting of `input.py`, with its default (from `config.py`). Dictionary sec
 
 | Setting | Default | Stage | Meaning |
 |---|---|---|---|
-| `temperatures` | `[300]` | 3 | main temperature grid, K |
-| `pressure_mode` | `'fixed'` | 3 | `'fixed'` or `'input'` (temperature-linked) |
-| `reference_pressure` | $10^{5}$ Pa | 3 | $P_{\mathrm{ref}}$ in fixed mode |
-| `input_pressures` | `{}` | 3 | {T: Pa}, $P_{\mathrm{ref}}$ in input mode |
-| `impurity_ratio` | 0.25 | 3 | $r = p_I/p_{A_2}$ |
+| `temperatures` | `[300]` | 3 | temperature series, K |
+| `reference_pressure` | $10^{5}$ Pa | 3 | probe-gas partial pressure of the temperature series (total pressure on the `input_X` basis) |
+| `pressures` | `[]` | 3 | pressure series, Pa (probe-gas partial pressure); `[]` = none |
+| `pressure_temperatures` | `None` (the lowest temperature) | 3 | a pressure series at each of these temperatures, K |
+| `impurity_ratio` | 0.25 | 3 | $r = p_I/p_{A_2}$, the same in both series |
 | `mixture_mode` | `'same_each'` | 3 | each impurity at $r$ in the mixture, or `'split'` ($r/N_I$) |
 | `include_input_basis` | False | 3 | also compute the mole-fraction basis |
 | `input_basis` | single 0.8/0.2; mixture 0.75 + 0.05 each | 3 | mole fractions of the `input_X` basis |
@@ -1294,31 +1311,31 @@ Every setting of `input.py`, with its default (from `config.py`). Dictionary sec
 | `plot_style` | `'screen'` | `'screen'` (bold, 300 dpi PNG) or `'publication'` (7 pt, PDF + 600 dpi PNG) |
 | `publication_width_cm` | 17.8 | 17.8 double column, 8.5 single column; tall figures are capped at 22 cm high |
 
-**Analysis sections** (`None` means: take it from the main settings)
+**Analysis sections** (`None` means: take it from the main settings). The point-based sections (`diagnostics`, `curves`, `orders`, `rate_control`, `paths`, `transients`) also take `series` (`None` = both; `'temperature'` or `'pressure'`), `temperatures`, `pressures` and `pressure_temperatures`.
 
 | Section | Keys (defaults) | Stage |
 |---|---|---|
 | `composition` | `min_listed` ($10^{-3}$), `min_plotted` (0.02), `max_named` (7) | 8 |
-| `diagnostics` | `adsorption_checks` (`[]`: tuples of label, reactants, products, (lit. ΔH low, high) kJ/mol, note), `switch_off` (None = the molecular adsorbate), `switch_off_cases` (None = every case), `top_reactions` (`[]`: (case, T, species)), `top_n` (5) | 10 |
-| `curves` | `ratios` ($10^{-6}$ … 0.25, 12 levels), `temperatures`, `impurities` | 11.1 |
-| `sweep` | `temperatures` (None = main range in `step` K), `step` (50), `ratio`, `impurities` | 11.2 |
-| `orders` | `temperatures`, `ratio`, `delta` (0.10), `impurities` | 11.3 |
-| `rate_control` | `temperatures`, `cases` (None = reference + every impurity), `ratio`, `drc_delta` (0.05), `drc_top_n` (20), `trc_delta` ($10^{6}$ J/kmol), `trc_min_coverage` ($10^{-3}$) | 11.4 |
-| `paths` | `conditions` (None = every case at the lowest T), `elements` (None = the probe gas's), `threshold` ($10^{-8}$), `flow_type` (`'OneWayFlow'`), `formats` (`['png']`) | 11.5 |
-| `transients` | `temperatures`, `impurities`, `ratios` ($10^{-6}$, $10^{-4}$, $10^{-2}$, 0.25), `t_start` ($10^{-9}$ s), `t_stop` ($10^{8}$ s), `per_decade` (4) | 11.6 |
-| `flux` | `rmg_path`, `rmg_input` and `seed_dir` (required), `species_dir` (None = `output/flux_species`), `reactor_indices` (None = all), `n_points` (100), `rtol`/`atol` ($10^{-10}$, $10^{-22}$), `skip_existing` (True) | 2 |
+| `diagnostics` | `adsorption_checks` (`[]`: tuples of label, reactants, products, (lit. ΔH low, high) kJ/mol, note), `switch_off` (None = the molecular adsorbate), `switch_off_cases` (None = every case), `top_reactions` (`[]`: (case, T, species) or (case, T, P, species)), `top_n` (5) | 10 |
+| `curves` | `ratios` ($10^{-6}$ … 0.25, 12 levels), `impurities`, the series keys | 11.1 |
+| `sweep` | `temperatures` (None = main range in `step` K), `step` (50), `ratio`, `impurities`; always at `reference_pressure` | 11.2 |
+| `orders` | `ratio`, `delta` (0.10), `impurities`, the series keys | 11.3 |
+| `rate_control` | `cases` (None = reference + every impurity), the series keys, `ratio`, `drc_delta` (0.05), `drc_top_n` (20), `trc_delta` ($10^{6}$ J/kmol), `trc_min_coverage` ($10^{-3}$) | 11.4 |
+| `paths` | `conditions` (`(case, T)` or `(case, T, P)`; None = every case at every series point), `elements` (None = the probe gas's), `threshold` ($10^{-8}$), `flow_type` (`'OneWayFlow'`), `formats` (`['png']`) | 11.5 |
+| `transients` | `impurities`, the series keys, `ratios` ($10^{-6}$, $10^{-4}$, $10^{-2}$, 0.25), `t_start` ($10^{-9}$ s), `t_stop` ($10^{8}$ s), `per_decade` (4) | 11.6 |
+| `flux` | `rmg_path`, `rmg_input` and `seed_dir` (None = the RMG `input.py` and `seed/seed` next to `settings.py`), `species_dir` (None = `output/flux_species`), `reactor_indices` (None = all), `n_points` (100), `rtol`/`atol` ($10^{-10}$, $10^{-22}$), `skip_existing` (True) | 2 |
 
 **RMG's flux-diagram module** (`rmgpy/tools/fluxdiagram.py`, values in the local build): `max_node_count` = 50, `max_edge_count` = 50, `concentration_tol` = $10^{-6}$, `species_rate_tol` = $10^{-6}$, `max_node_pen_width` = 10, `max_edge_pen_width` = 10, `video_fps` = 6, `initial_padding` = `final_padding` = 5 s, layout program `dot`.
 
 ## C. Output files
 
-All files are in the run's `output/` folder. With `plot_style = 'publication'`, every `.png` figure also has a `.pdf`.
+All files are in the run's `output/` folder. With `plot_style = 'publication'`, every `.png` figure also has a `.pdf`. Figures of point-based analyses come in two versions, `<name>_vs_T` (temperature series) and `<name>_vs_P` (pressure series, when there is one). Every table has the point columns `T_K`, `P_ref_bar` (the point's probe-gas pressure, bar) and `series` (`temperature`, `pressure` or `both`).
 
 **`steady_state_results.csv`** (Stage 7), one row per condition.
 
 | Column | Meaning |
 |---|---|
-| `key`, `basis`, `case`, `T_K` | condition |
+| `key`, `basis`, `case`, `T_K`, `P_ref_bar`, `series` | condition and point |
 | `P_total_bar`, `P_probe_bar`, `P_impurity_bar` | total, probe-gas and total impurity partial pressure (bar) |
 | `tof_fwd`, `tof_rev`, `tof_net` | forward, reverse and net TOF of the probe reaction (s⁻¹) |
 | `tof_molec_fwd`, `tof_molec_net` | forward and net TOF of molecular adsorption (s⁻¹; only with a molecular adsorbate) |
@@ -1334,32 +1351,32 @@ All files are in the run's `output/` folder. With `plot_style = 'publication'`, 
 | `poisoning_factor`, `slowdown_x` | $\Pi$ and $1/\Pi$ |
 | `blocking_from_theta`, `blocking_check` | site-blocking prediction from coverages; $\Pi$ divided by the full prediction |
 
-**`steady_state_coverages.csv`** (Stage 8): rows (basis, T_K, case); one column per surface species with non-zero coverage anywhere.
+**`steady_state_coverages.csv`** (Stage 8): rows (basis, series, T_K, P_ref_bar, case); one column per surface species with non-zero coverage anywhere.
 
-**`steady_state_surface_species.csv`** (Stage 8): `basis`, `T_K`, `case`, `species` (readable label), `mechanism_name`, `coverage`, for every species above `composition['min_listed']`.
+**`steady_state_surface_species.csv`** (Stage 8): `basis`, `series`, `T_K`, `P_ref_bar`, `case`, `species` (readable label), `mechanism_name`, `coverage`, for every species above `composition['min_listed']`.
 
-**`surface_composition.png`** (Stage 8) and **`rates_summary.png`** (Stage 9).
+**`surface_composition_vs_T/_vs_P.png`** (Stage 8) and **`rates_summary_vs_T/_vs_P.png`** (Stage 9).
 
 **`basis_comparison.csv`** (Stage 9, with `include_input_basis`): forward TOF on both bases and their ratio.
 
 **`mechanism_binding_check.csv`** (Stage 10.1): `adsorption`, `dH_298_mech`, `dH_literature`, `lit_low`, `lit_high`, `verdict`, `dG_<T>` for each main temperature, `literature_note`. Figure: `binding_check.png`.
 
-**`mechanism_switch_off.csv`** (Stage 10.2): `switched_off`, `case`, `T_K`, `tof_normal`, `theta_free_normal`, `converged`, `tof_switched_off`, `theta_free_switched_off`, `top_switched_off`, `tof_ratio`, and `slowdown_normal`/`slowdown_switched_off` relative to the reference case.
+**`mechanism_switch_off.csv`** (Stage 10.2): `switched_off`, `series`, `case`, `T_K`, `P_ref_bar`, `tof_normal`, `theta_free_normal`, `converged`, `tof_switched_off`, `theta_free_switched_off`, `top_switched_off`, `tof_ratio`, and `slowdown_normal`/`slowdown_switched_off` relative to the reference case.
 
-**`top_reactions.csv`** (Stage 10.3): `case`, `T_K`, `species`, `label`, `coverage`, `rate_1_per_s` (positive: makes the species), `reaction`, `equation`, `source` (the provenance line of the YAML note).
+**`top_reactions.csv`** (Stage 10.3): `case`, `T_K`, `P_ref_bar`, `species`, `label`, `coverage`, `rate_1_per_s` (positive: makes the species), `reaction`, `equation`, `source` (the provenance line of the YAML note).
 
 **Stage 11**:
-- `poisoning_curves.csv`, `poisoning_curves.png` (11.1): one row per (T, case, level) with the Stage 7 columns and `ratio`; `poisoning_tolerance.csv`: `ratio_at_half_rate`, `ppm_of_probe` and `note` per (T, impurity).
+- `poisoning_curves.csv`, `poisoning_curves_vs_T/_vs_P.png` (11.1): one row per (point, case, level) with the Stage 7 columns and `ratio`; `poisoning_tolerance.csv`: `ratio_at_half_rate`, `ppm_of_probe` and `note` per (point, impurity).
 - `temperature_sweep.csv`, `temperature_sweep.png` (11.2): the same per (case, T), plus `E_app_kJ_per_mol`; `release_temperature.csv`: `release_T_K` and `note` per impurity; `sweep_coverages.png`: what covers the surface against temperature.
-- `reaction_orders.csv` (11.3): `T_K`, `case`, `tof_fwd_base`, `order_probe`, `order_impurity`, `all_starts_agree`.
-- `rate_control.png` (11.3–11.4): TRC per case and the reaction orders.
-- `sensitivity.csv` (11.4): `kind` (DRC or TRC), `T_K`, `case`, `item` (reaction index or species), `label`, `X_tof_fwd`, `X_probe_consumed`, `methods` (solver used for the + and − perturbations).
-- `reaction_paths/path_<element>_<case>_<T>K_<flow>.dot` and `.png` (11.5).
-- `poisoning_over_time.csv` (11.6): `tof_t0`, `tof_end`, `end_over_t0`, `min_over_t0`, `t_min_s`, `t_end_s`, `t_half_s`, `t_tenth_s`, `t_settle_s`, `gas_drift`, `top_species_end`, `error`; `poisoning_over_time_trajectories.csv`: every recorded time point; `poisoning_over_time.png`.
+- `reaction_orders.csv` (11.3): `series`, `T_K`, `P_ref_bar`, `case`, `tof_fwd_base`, `order_probe`, `order_impurity`, `all_starts_agree`.
+- `rate_control_vs_T/_vs_P.png` (11.3–11.4): TRC per case and point, and the reaction orders.
+- `sensitivity.csv` (11.4): `kind` (DRC or TRC), `series`, `T_K`, `P_ref_bar`, `case`, `item` (reaction index or species), `label`, `X_tof_fwd`, `X_probe_consumed`, `methods` (solver used for the + and − perturbations).
+- `reaction_paths/path_<element>_<case>_<T>K_<P>bar_<flow>.dot` and `.png` (11.5).
+- `poisoning_over_time.csv` (11.6): `series`, `T_K`, `P_ref_bar`, `case`, `ratio`, `tof_t0`, `tof_end`, `end_over_t0`, `min_over_t0`, `t_min_s`, `t_end_s`, `t_half_s`, `t_tenth_s`, `t_settle_s`, `gas_drift`, `top_species_end`, `error`; `poisoning_over_time_trajectories.csv`: every recorded time point; `poisoning_over_time_vs_T/_vs_P.png`.
 - `cache_diagnostics/`, `cache_sensitivity/`, `cache_transients/`: one `.pkl` per job (10.2, 11.4, 11.6).
 
 **`cache/*.pkl`** (Stage 6; main conditions and 11.1–11.3): one dictionary per condition with
-- `status` (`done`, `error` or `timeout`), `job` (its `key` and `row`, the condition), `wall_seconds`;
+- `status` (`done`, `error` or `timeout`), `job` (its `key`, `row` (the condition's physics) and `_labels` (`P_ref_bar`, `series`)), `wall_seconds`;
 - `species`: the surface species names, in the order of the coverage arrays;
 - `theta_a`, `info_a`, `theta_b`, `info_b`: coverages and solver information for each start;
 - `start_b`, `start_b_info`: the starting surface B and how it was obtained;

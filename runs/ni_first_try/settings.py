@@ -25,10 +25,9 @@ impurities = {                                   # found by composition, so renu
 mixture_label = 'all'
 
 # --- Conditions ------------------------------------------------------------------------
-temperatures = [300.0, 700.0, 1000.0]            # K
-pressure_mode = 'fixed'                          # same P_H2 at every T
-reference_pressure = 1.0e5                       # Pa
-input_pressures = {300.0: 5.0e5, 700.0: 3.0e5, 1000.0: 1.0e5}   # used if pressure_mode = 'input'
+temperatures = [300.0, 700.0, 1000.0]            # K: temperature series, at reference_pressure
+reference_pressure = 1.0e5                       # Pa (H2 partial pressure)
+pressures = []                                   # no pressure series for this first mechanism
 impurity_ratio = 0.25                            # p(impurity) / p(H2): the RMG input's 80:20
 mixture_mode = 'same_each'
 include_input_basis = False

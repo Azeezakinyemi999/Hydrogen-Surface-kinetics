@@ -6,8 +6,10 @@ Stage 11d).
                                         held fixed via rate multipliers)
 Every perturbed steady state starts from a clean surface: a warm start from the base
 looks converged at once and misses slow re-equilibration.
-Outputs: sensitivity.csv; rate_control.png (TRC per case, plus the reaction orders when the
-'orders' analysis has run).
+Runs at every point of the temperature and pressure series.
+Outputs: sensitivity.csv; rate_control_vs_T.png and, with a pressure series,
+rate_control_vs_P.png (TRC per case and point, plus the reaction orders when the 'orders'
+analysis has run).
 """
 import os
 
@@ -16,6 +18,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+from .. import conditions as C
 from .. import plotting as P
 from .. import solver as S
 from ..conditions import case_labels
@@ -62,31 +65,35 @@ def run(ctx):
     ctx.log('\n== rate_control: DRC and TRC ==')
     ratio = common.setting(ctx, 'rate_control', 'ratio', cfg.impurity_ratio)
     cases = s['cases'] or [cfg.reference_label] + list(cfg.impurities)
-    temps = common.temperatures(ctx, 'rate_control')
+    pts = common.points(ctx, 'rate_control')
     func = lambda job: _solve(model, job)                                   # noqa: E731
     note = lambda res: S.describe(res['info'])                              # noqa: E731
 
-    rows = {(T, case): common.fixed_probe_row(ctx, 'sensitivity', case, T, impurity_ratio=ratio) for T in temps for case in cases}
-    base_jobs = [{'key': f'base | {case} | {T:.0f} K', 'row': row, 'multipliers': {}, 'h_shifts': {}}
-                 for (T, case), row in rows.items()]
+    def where(case, pt):
+        return f"{case} | {pt['T']:.0f} K | {pt['P'] / 1e5:g} bar"
+
+    rows = {(i, case): common.fixed_probe_row(ctx, 'sensitivity', case, pt, impurity_ratio=ratio)
+            for i, pt in enumerate(pts) for case in cases}
+    base_jobs = [common.job(f'base | {where(case, pts[i])}', row, multipliers={}, h_shifts={})
+                 for (i, case), row in rows.items()]
     base = ctx.run_jobs(func, base_jobs, 'cache_sensitivity', describe=note)
 
     jobs, plan = [], []
-    for (T, case), row in rows.items():
-        b = base[f'base | {case} | {T:.0f} K']
+    for (i, case), row in rows.items():
+        pt = pts[i]
+        b = base[f'base | {where(case, pt)}']
         if b['status'] != 'done' or not b['info']['converged']:
-            ctx.log(f'  skipping {case} {T:.0f} K: base steady state not converged')
+            ctx.log(f'  skipping {where(case, pt)}: base steady state not converged')
             continue
-        for i in drc_reactions(ctx, row, b['theta']):
+        for k in drc_reactions(ctx, row, b['theta']):
             for sign, m in (('+', 1 + s['drc_delta']), ('-', 1 - s['drc_delta'])):
-                jobs.append({'key': f'drc {i} {sign} | {case} | {T:.0f} K', 'row': row,
-                             'multipliers': {i: m}, 'h_shifts': {}})
-            plan.append(('DRC', T, case, i))
+                jobs.append(common.job(f'drc {k} {sign} | {where(case, pt)}', row, multipliers={k: m}, h_shifts={}))
+            plan.append(('DRC', pt, case, k))
         for name in trc_species(ctx, b['theta']):
             for sign, dG in (('+', s['trc_delta']), ('-', -s['trc_delta'])):
-                jobs.append({'key': f'trc {name} {sign} | {case} | {T:.0f} K', 'row': row,
-                             'multipliers': trc_multipliers(model, name, dG, T), 'h_shifts': {name: dG}})
-            plan.append(('TRC', T, case, name))
+                jobs.append(common.job(f'trc {name} {sign} | {where(case, pt)}', row,
+                                       multipliers=trc_multipliers(model, name, dG, pt['T']), h_shifts={name: dG}))
+            plan.append(('TRC', pt, case, name))
     ctx.log(f'  {len(jobs)} perturbed solves')
     pert = ctx.run_jobs(func, jobs, 'cache_sensitivity', describe=note)
 
@@ -97,17 +104,18 @@ def run(ctx):
         return np.log(v) if v > 0 else np.nan
 
     out = []
-    for kind, T, case, item in plan:
+    for kind, pt, case, item in plan:
         tag = f'drc {item}' if kind == 'DRC' else f'trc {item}'
-        up, dn = pert.get(f'{tag} + | {case} | {T:.0f} K', {}), pert.get(f'{tag} - | {case} | {T:.0f} K', {})
-        b = base[f'base | {case} | {T:.0f} K']
+        up, dn = pert.get(f'{tag} + | {where(case, pt)}', {}), pert.get(f'{tag} - | {where(case, pt)}', {})
+        b = base[f'base | {where(case, pt)}']
         if kind == 'DRC':
             span = np.log(1 + s['drc_delta']) - np.log(1 - s['drc_delta'])
             label = model.surf.reaction(item).equation
         else:
-            span = -2 * s['trc_delta'] / (ct.gas_constant * T)
+            span = -2 * s['trc_delta'] / (ct.gas_constant * pt['T'])
             label = f'{species_label(model, item)}  [{item}]'
-        row = {'kind': kind, 'T_K': T, 'case': case, 'item': item, 'label': label,
+        row = {'kind': kind, 'series': pt['series'], 'T_K': pt['T'], 'P_ref_bar': pt['P'] / 1e5, 'case': case,
+               'item': item, 'label': label,
                'methods': f"{up.get('info', {}).get('method')}/{dn.get('info', {}).get('method')}"}
         for col, name in (('tof_fwd', 'X_tof_fwd'), ('probe_consumed', 'X_probe_consumed')):
             row[name] = (log_rate(up, col) - log_rate(dn, col)) / span
@@ -116,16 +124,19 @@ def run(ctx):
         out.append(row)
     sens = pd.DataFrame(out)
     ctx.save_table(sens, 'sensitivity.csv')
-    for (kind, T, case), part in sens.groupby(['kind', 'T_K', 'case'], sort=False):
-        part = part.reindex(part['X_tof_fwd'].abs().sort_values(ascending=False).index)
-        ctx.log(f'  --- {kind}, {case}, {T:.0f} K (sum of X on forward TOF = {part["X_tof_fwd"].sum():.3f}) ---')
-        ctx.log(part[['X_tof_fwd', 'X_probe_consumed', 'methods', 'label']].head(8)
-                .to_string(index=False, float_format=lambda v: f'{v:+.3f}'))
+    if len(sens):
+        for (kind, T, Pb, case), part in sens.groupby(['kind', 'T_K', 'P_ref_bar', 'case'], sort=False):
+            part = part.reindex(part['X_tof_fwd'].abs().sort_values(ascending=False).index)
+            ctx.log(f'  --- {kind}, {case}, {T:.0f} K, {Pb:g} bar '
+                    f'(sum of X on forward TOF = {part["X_tof_fwd"].sum():.3f}) ---')
+            ctx.log(part[['X_tof_fwd', 'X_probe_consumed', 'methods', 'label']].head(8)
+                    .to_string(index=False, float_format=lambda v: f'{v:+.3f}'))
     orders = orders_table(ctx)
-    fig = plot_rate_control(ctx, sens, orders)
-    if fig is not None:
-        P.save(fig, ctx.path('rate_control.png'), cfg)
-        plt.close(fig)
+    for series in C.SERIES:
+        fig = plot_rate_control(ctx, sens, orders, series)
+        if fig is not None:
+            P.save(fig, ctx.path(common.series_file('rate_control', series)), cfg)
+            plt.close(fig)
     ctx.outputs['rate_control'] = {'base': base, 'perturbed': pert, 'sensitivity': sens}
     return ctx.outputs['rate_control']
 
@@ -141,27 +152,33 @@ def orders_table(ctx):
     return None
 
 
-def plot_rate_control(ctx, sens, orders=None, min_abs=0.01):
-    """Top: TRC of the forward probe rate, one panel per (T, case), species with |X| >= min_abs.
-    Bottom (if orders are given): reaction orders in the probe gas and the impurity, per T."""
-    trc = sens[sens['kind'] == 'TRC']
+def plot_rate_control(ctx, sens, orders=None, series='temperature', min_abs=0.01):
+    """For one series. Top: TRC of the forward probe rate, a row of panels (one per case) per
+    point, species with |X| >= min_abs. Bottom (if orders are given): the reaction orders in
+    the probe gas and the impurity, one panel per point."""
+    if orders is not None and 'P_ref_bar' not in orders:
+        orders = None                          # a table from before the pressure series: no point to match
+    if sens.empty:
+        return None
+    trc = C.in_series(sens[sens['kind'] == 'TRC'], series)
     if trc.empty:
         return None
     order = case_labels(ctx.cfg)
-    temps = sorted(trc['T_K'].unique())
+    pts = list(trc[['T_K', 'P_ref_bar']].drop_duplicates().sort_values(['T_K', 'P_ref_bar']).itertuples(index=False))
     cases = [c for c in order if c in set(trc['case'])]
-    ord_T = [] if orders is None else [T for T in temps if T in set(orders['T_K'])]
+    ord_pts = [] if orders is None else [p for p in pts
+                                         if ((orders['T_K'] == p[0]) & (orders['P_ref_bar'] == p[1])).any()]
     ncol = len(cases)
-    mosaic = ([[f't{i}_{j}' for j in range(ncol)] for i in range(len(temps))]
-              + [[f'o{i}'] * ncol for i in range(len(ord_T))])
-    fig, axd = plt.subplot_mosaic(mosaic, figsize=(max(3.4 * ncol, 8.0), 2.7 * len(temps) + 3.2 * len(ord_T)),
-                                  height_ratios=[1.0] * len(temps) + [1.15] * len(ord_T))
+    mosaic = ([[f't{i}_{j}' for j in range(ncol)] for i in range(len(pts))]
+              + [[f'o{i}'] * ncol for i in range(len(ord_pts))])
+    fig, axd = plt.subplot_mosaic(mosaic, figsize=(max(3.4 * ncol, 8.0), 2.7 * len(pts) + 3.2 * len(ord_pts)),
+                                  height_ratios=[1.0] * len(pts) + [1.15] * len(ord_pts))
     xmin = min(-2.2, trc['X_tof_fwd'].min() * 1.15)
     xmax = max(0.75, trc['X_tof_fwd'].max() * 1.15 + 0.6)
-    for i, T in enumerate(temps):
+    for i, (T, Pb) in enumerate(pts):
         for j, case in enumerate(cases):
             ax = axd[f't{i}_{j}']
-            part = trc[(trc['T_K'] == T) & (trc['case'] == case)]
+            part = trc[(trc['T_K'] == T) & (trc['P_ref_bar'] == Pb) & (trc['case'] == case)]
             show = part[part['X_tof_fwd'].abs() >= min_abs].sort_values('X_tof_fwd', key=abs, ascending=False)
             y = np.arange(len(show))[::-1]
             ax.barh(y, show['X_tof_fwd'], height=0.6, color=P.SERIES_COLORS[0], zorder=2)
@@ -175,13 +192,13 @@ def plot_rate_control(ctx, sens, orders=None, min_abs=0.01):
             ax.set_xlabel(f'$X_{{TRC}}$ of the forward rate (sum {P.signed(part["X_tof_fwd"].sum())})',
                           fontsize=9, color=P.INK)
             P.style_axis(ax)
-            P.keep_title(ax, f'{case}, {T:.0f} K')
+            P.keep_title(ax, f'{case}, {T:.0f} K, {Pb:g} bar')
             ax.grid(axis='y', visible=False)
             ax.grid(axis='x', color=P.GRID, linewidth=0.6)
     probe = probe_label(ctx.model)
-    for i, T in enumerate(ord_T):
+    for i, (T, Pb) in enumerate(ord_pts):
         ax = axd[f'o{i}']
-        o = orders[orders['T_K'] == T].set_index('case')
+        o = orders[(orders['T_K'] == T) & (orders['P_ref_bar'] == Pb)].set_index('case')
         cs = [c for c in order if c in o.index]
         x = np.arange(len(cs))
         for col, dx, color, marker, lab in (('order_probe', -0.12, P.SERIES_COLORS[0], 'o', f'order in {probe}'),
@@ -196,16 +213,16 @@ def plot_rate_control(ctx, sens, orders=None, min_abs=0.01):
         ax.axhline(0, color=P.MUTED, lw=0.8, zorder=1)
         ax.set_xticks(x, cs)
         ax.set_xlim(-0.6, len(cs) - 0.4)
-        lo = np.nanmin(o[['order_probe', 'order_impurity']].to_numpy(dtype=float))
-        hi = np.nanmax(o[['order_probe', 'order_impurity']].to_numpy(dtype=float))
+        vals_all = o[['order_probe', 'order_impurity']].to_numpy(dtype=float)
+        lo, hi = (np.nanmin(vals_all), np.nanmax(vals_all)) if np.isfinite(vals_all).any() else (0.0, 0.0)
         ax.set_ylim(min(lo, -0.5) - 0.5, max(hi, 0.5) + 0.5)
         P.style_axis(ax, ylabel='reaction order  d ln TOF / d ln p')
-        P.keep_title(ax, f'reaction orders, {T:.0f} K')
-    if ord_T:
+        P.keep_title(ax, f'reaction orders, {T:.0f} K, {Pb:g} bar')
+    if ord_pts:
         handles, labels = axd['o0'].get_legend_handles_labels()
         fig.legend(handles, labels, loc='upper center', bbox_to_anchor=(0.5, 1.02), ncol=len(labels),
                    frameon=False, fontsize=9)
-    fig.suptitle('What controls the rate: thermodynamic rate control and reaction orders', x=0.01, ha='left',
-                 fontsize=11)
+    fig.suptitle(f'What controls the rate ({series} series): thermodynamic rate control and reaction orders',
+                 x=0.01, ha='left', fontsize=11)
     fig.tight_layout(rect=(0, 0, 1, 0.95))
     return fig

@@ -96,7 +96,9 @@ def switch_off(ctx):
     multipliers = {i: 0.0 for i in rxns}
     cases = s['switch_off_cases'] or C.case_labels(ctx.cfg)
     main = ctx.main()['summary']
-    base = main[(main['basis'] == 'fixed_probe') & main['case'].isin(cases)]
+    wanted = {(pt['T'], round(pt['P'] / 1e5, 12)) for pt in common.points(ctx, 'diagnostics')}
+    at_points = [(T, round(Pb, 12)) in wanted for T, Pb in zip(main['T_K'], main['P_ref_bar'].astype(float))]
+    base = main[(main['basis'] == 'fixed_probe') & main['case'].isin(cases) & np.array(at_points, dtype=bool)]
     ctx.log(f'  switch-off what-if: {len(rxns)} reactions involve {species}')
 
     def job_func(job):
@@ -105,13 +107,14 @@ def switch_off(ctx):
         return {'theta': theta, 'info': info}
 
     results = ctx.main()['results']
-    jobs = [{'key': f"switch_off {species} | {r.case} | {r.T_K:.0f} K", 'row': results[r.key]['row'],
-             'multipliers': multipliers} for r in base.itertuples()]
+    jobs = [common.job(f"switch_off {species} | {r.case} | {r.T_K:.0f} K | {r.P_ref_bar:g} bar",
+                       results[r.key]['row'], multipliers=multipliers) for r in base.itertuples()]
     out = ctx.run_jobs(job_func, jobs, 'cache_diagnostics', describe=lambda res: S.describe(res['info']))
     rows = []
     for r, job in zip(base.itertuples(), jobs):
         res = out[job['key']]
-        row = {'case': r.case, 'T_K': r.T_K, 'tof_normal': r.tof_fwd, 'theta_free_normal': r.theta_free}
+        row = {'series': r.series, 'case': r.case, 'T_K': r.T_K, 'P_ref_bar': r.P_ref_bar,
+               'tof_normal': r.tof_fwd, 'theta_free_normal': r.theta_free}
         ok = res['status'] == 'done' and res['info']['converged']
         row['converged'] = ok
         if ok:
@@ -123,18 +126,23 @@ def switch_off(ctx):
         rows.append(row)
     df = pd.DataFrame(rows)
     df['tof_ratio'] = df.get('tof_switched_off', np.nan) / df['tof_normal']
-    ref = df[df['case'] == ctx.cfg.reference_label].set_index('T_K')
+    ref = df[df['case'] == ctx.cfg.reference_label].set_index(['T_K', 'P_ref_bar'])
     for col in ('tof_normal', 'tof_switched_off'):
         if col in df and len(ref):
-            df[f'slowdown_{col[4:]}'] = df['T_K'].map(ref[col]) / df[col]
+            ref_val = [ref[col].get((T, Pb), np.nan) for T, Pb in zip(df['T_K'], df['P_ref_bar'])]
+            df[f'slowdown_{col[4:]}'] = np.array(ref_val, dtype=float) / df[col]
     df.insert(0, 'switched_off', species)
     return df
 
 
-def top_reactions(ctx, case, T, species, n=5):
+def top_reactions(ctx, case, T, species, n=5, P=None):
+    """Largest sources and sinks of `species` at a main steady state (P in Pa; None = the
+    reference pressure)."""
     model = ctx.model
     summary = ctx.main()['summary']
-    hit = summary[(summary['basis'] == 'fixed_probe') & (summary['case'] == case) & (summary['T_K'] == float(T))]
+    Pb = (ctx.cfg.reference_pressure if P is None else float(P)) / 1e5
+    hit = summary[(summary['basis'] == 'fixed_probe') & (summary['case'] == case) & (summary['T_K'] == float(T))
+                  & np.isclose(summary['P_ref_bar'].astype(float), Pb)]
     if hit.empty or not hit['converged'].iloc[0]:
         return []
     res = ctx.main()['results'][hit['key'].iloc[0]]
@@ -145,7 +153,7 @@ def top_reactions(ctx, case, T, species, n=5):
         nu = r.products.get(species, 0) - r.reactants.get(species, 0)
         if nu and q[i] != 0:
             note = r.input_data.get('note', '').splitlines()
-            out.append({'case': case, 'T_K': float(T), 'species': species, 'label': species_label(model, species),
+            out.append({'case': case, 'T_K': float(T), 'P_ref_bar': Pb, 'species': species, 'label': species_label(model, species),
                         'coverage': res['theta_a'][model.species_names.index(species)],
                         'rate_1_per_s': q[i] * nu, 'reaction': i, 'equation': r.equation,
                         'source': note[1] if len(note) > 1 else ''})
@@ -170,7 +178,11 @@ def run(ctx):
         ctx.save_table(sw, 'mechanism_switch_off.csv')
         ctx.log(sw.to_string(index=False, float_format=lambda v: f'{v:.3g}'))
     if s['top_reactions']:
-        rows = [r for case, T, sp in s['top_reactions'] for r in top_reactions(ctx, case, T, sp, s['top_n'])]
+        rows = []
+        for entry in s['top_reactions']:                 # (case, T, species) or (case, T, P, species)
+            case, T, *rest = entry
+            P_pa, sp = (rest[0], rest[1]) if len(rest) == 2 else (None, rest[0])
+            rows += top_reactions(ctx, case, T, sp, s['top_n'], P_pa)
         out['top_reactions'] = pd.DataFrame(rows)
         ctx.save_table(out['top_reactions'], 'top_reactions.csv')
         for r in rows:

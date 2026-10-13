@@ -15,7 +15,7 @@ import cantera as ct
 import numpy as np
 import pandas as pd
 
-from .conditions import condition_key
+from .conditions import condition_key, split_labels
 from .runner import run_jobs
 
 
@@ -256,11 +256,13 @@ def solve_condition(model, row, multipliers=None, h_shifts=None, both_starts=Tru
 
 # --- Many conditions in parallel (Stage 6) ------------------------------------------
 def condition_jobs(conditions, prefix=''):
-    """Conditions table -> runner jobs (one per row)."""
+    """Conditions table -> runner jobs (one per row). The row's labels go into '_labels',
+    which the runner does not hash."""
     jobs = []
     for _, row in conditions.iterrows():
         row = row.to_dict()
-        jobs.append({'key': prefix + condition_key(row), 'row': row})
+        physics, labels = split_labels(row)
+        jobs.append({'key': prefix + condition_key(row), 'row': physics, '_labels': labels})
     return jobs
 
 
@@ -286,7 +288,7 @@ def run_conditions(model, conditions, cache_subdir='cache', prefix='', both_star
                        workers=run['workers'], timeout=run['job_timeout'], recompute=run['recompute'],
                        describe=note, log=log)
     for res in results.values():
-        res['row'] = res['job']['row']
+        res['row'] = {**res['job']['row'], **res['job'].get('_labels', {})}
     return results
 
 
@@ -299,6 +301,7 @@ def status_table(results):
         has_b = done and 'info_b' in res
         rows.append({
             'key': key, 'basis': r['basis'], 'case': r['case'], 'T_K': r['T_K'],
+            'P_ref_bar': r.get('P_ref_bar'), 'series': r.get('series'),
             'status': res.get('status'),
             'method_A': res['info_a']['method'] if done else None,
             'method_B': res['info_b']['method'] if has_b else None,
