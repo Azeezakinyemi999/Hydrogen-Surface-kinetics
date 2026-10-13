@@ -5,12 +5,15 @@
    molecular adsorbate) gets rate multiplier 0, and the main cases are solved again.
 3. top_reactions: largest sources and sinks of chosen species at chosen conditions.
 
-Outputs: mechanism_binding_check.csv, mechanism_switch_off.csv, top_reactions.csv.
+Outputs: mechanism_binding_check.csv + binding_check.png, mechanism_switch_off.csv,
+top_reactions.csv.
 """
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
 from .. import conditions as C
+from .. import plotting as P
 from .. import solver as S
 from ..labels import species_label
 from . import common
@@ -35,12 +38,53 @@ def binding_check(ctx):
     for label, reac, prod, (lo, hi), note in ctx.cfg.diagnostics['adsorption_checks']:
         dH298, _ = reaction_thermo(ctx.model, reac, prod, 298.15)
         verdict = 'OK' if lo <= dH298 <= hi else ('TOO STRONG' if dH298 < lo else 'TOO WEAK')
-        out = {'adsorption': label, 'dH_298_mech': dH298, 'dH_literature': f'{lo} to {hi}', 'verdict': verdict}
+        out = {'adsorption': label, 'dH_298_mech': dH298, 'dH_literature': f'{lo} to {hi}',
+               'lit_low': float(lo), 'lit_high': float(hi), 'verdict': verdict}
         for T in temps:
             out[f'dG_{T:.0f}'] = reaction_thermo(ctx.model, reac, prod, T)[1]
         out['literature_note'] = note
         rows.append(out)
     return pd.DataFrame(rows)
+
+
+VERDICT_STYLE = {                       # color + marker shape, so the verdict is never color alone
+    'OK':         dict(color=P.INK, marker='o', label='within range'),
+    'TOO STRONG': dict(color=P.DIVERGING_HIGH, marker='<', label='too strong (more negative)'),
+    'TOO WEAK':   dict(color=P.DIVERGING_LOW, marker='>', label='too weak'),
+}
+
+
+def plot_binding_check(df):
+    """Literature range (gray bar) and the mechanism's value (marker) per adsorption."""
+    n = len(df)
+    y = np.arange(n)[::-1]                                   # first check at the top
+    fig, ax = plt.subplots(figsize=(8.0, 0.30 * n + 1.1))
+    lo_all = min(df['lit_low'].min(), df['dH_298_mech'].min())
+    hi_all = max(df['lit_high'].max(), df['dH_298_mech'].max())
+    pad = 0.06 * (hi_all - lo_all)
+    for yi, r in zip(y, df.itertuples()):
+        ax.plot([r.lit_low, r.lit_high], [yi, yi], color=P.RANGE_COLOR, lw=7, solid_capstyle='round', zorder=1)
+        st = VERDICT_STYLE[r.verdict]
+        ax.plot(r.dH_298_mech, yi, ls='', marker=st['marker'], ms=9, color=st['color'], mec='white', mew=0.8, zorder=3)
+        if r.verdict != 'OK':                                # selective direct labels, in ink
+            left = r.dH_298_mech < r.lit_low
+            ax.annotate(r.verdict.lower(), (r.dH_298_mech, yi), xytext=(-8 if left else 8, 0),
+                        textcoords='offset points', ha='right' if left else 'left', va='center',
+                        fontsize=8, color=P.SECONDARY_INK)
+    ax.set_yticks(y, [a.replace('->', '→') for a in df['adsorption']])
+    ax.set_xlim(lo_all - 1.5 * pad, hi_all + 2.0 * pad)       # room for the 'too weak' labels
+    ax.set_xlabel('adsorption enthalpy at 298 K (kJ/mol)   ← stronger binding', fontsize=10, color=P.INK)
+    P.style_axis(ax)
+    ax.grid(axis='y', visible=False)
+    ax.grid(axis='x', color=P.GRID, linewidth=0.6)
+    handles = [plt.Line2D([], [], color=P.RANGE_COLOR, lw=7, solid_capstyle='round', label='literature range')]
+    handles += [plt.Line2D([], [], ls='', marker=st['marker'], ms=9, color=st['color'], label=st['label'])
+                for v, st in VERDICT_STYLE.items() if v in set(df['verdict'])]
+    fig.legend(handles=handles, loc='upper center', bbox_to_anchor=(0.5, 1.02), ncol=len(handles),
+               frameon=False, fontsize=9)
+    fig.suptitle('Adsorption enthalpies: mechanism vs literature', x=0.01, ha='left', fontsize=11)
+    fig.tight_layout(rect=(0, 0, 1, 0.92))
+    return fig
 
 
 def switch_off(ctx):
@@ -116,6 +160,9 @@ def run(ctx):
     if s['adsorption_checks']:
         out['binding'] = binding_check(ctx)
         ctx.save_table(out['binding'], 'mechanism_binding_check.csv')
+        fig = plot_binding_check(out['binding'])
+        P.save(fig, ctx.path('binding_check.png'), ctx.cfg)
+        plt.close(fig)
         ctx.log(out['binding'].drop(columns='literature_note').to_string(index=False, float_format=lambda v: f'{v:8.1f}'))
     sw = switch_off(ctx)
     if sw is not None:

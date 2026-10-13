@@ -55,14 +55,14 @@ def run(ctx):
     bad = common.problems(df)
     if len(bad):
         ctx.log('  needs attention:\n' + bad[['T_K', 'case', 'ratio', 'converged', 'starts_agree']].to_string(index=False))
-    fig = plot_poisoning_curves(ctx, df)
+    fig = plot_poisoning_curves(ctx, df, tol)
     P.save(fig, ctx.path('poisoning_curves.png'), cfg)
     plt.close(fig)
     ctx.outputs['curves'] = {'results': results, 'curves': df, 'tolerance': tol}
     return ctx.outputs['curves']
 
 
-def plot_poisoning_curves(ctx, curves):
+def plot_poisoning_curves(ctx, curves, tolerance=None):
     cfg = ctx.cfg
     probe = probe_label(ctx.model)
     imps = common.impurity_labels(ctx, 'curves')
@@ -80,6 +80,10 @@ def plot_poisoning_curves(ctx, curves):
                 y = P.log_floor(d[col]) if col == 'theta_impurity' else d[col].to_numpy()
                 ax.plot(d['ratio'], y, '-o', color=colors[imp], ms=4.5, lw=1.6, label=imp)
                 ax.plot(d['ratio'].to_numpy()[two], y[two], 'o', ms=9, mfc='none', mec=P.INK, mew=1.2)
+            if tolerance is not None:                     # interpolated half-rate level (not the bounds)
+                t = tolerance[(tolerance['T_K'] == T) & (tolerance['case'] == imp) & (tolerance['note'].fillna('') == '')]
+                if len(t) and np.isfinite(t['ratio_at_half_rate'].iloc[0]):
+                    row[0].plot(t['ratio_at_half_rate'].iloc[0], 0.5, **P.HALF_MARK, mec=colors[imp])
         row[0].axhline(0.5, color=P.MUTED, lw=1, ls='--')
         row[0].text(min(cfg.curves['ratios']), 0.45, 'rate halved', color=P.MUTED, fontsize=8, ha='left', va='top')
         P.style_axis(row[0], f'{T:.0f} K: forward {probe} dissociation rate', f'poisoning factor  TOF / TOF({cfg.reference_label})')
@@ -89,6 +93,9 @@ def plot_poisoning_curves(ctx, curves):
             ax.set_yscale('log')
             ax.set_xlabel(f'impurity level  p(impurity) / p({probe})')
     handles, labels = axes[0][0].get_legend_handles_labels()
+    if tolerance is not None and (tolerance['note'].fillna('') == '').any():
+        handles.append(P.half_mark_handle('half-rate level'))
+        labels.append('half-rate level')
     handles.append(P.two_states_handle())
     labels.append('two steady states (starts disagree)')
     fig.legend(handles, labels, loc='upper center', bbox_to_anchor=(0.5, 1.03), ncol=len(labels), frameon=False, fontsize=9)

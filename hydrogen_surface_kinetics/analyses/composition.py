@@ -31,6 +31,30 @@ def surface_species(ctx, cov, min_listed):
     return pd.DataFrame(rows)
 
 
+def species_palette(cov, site, s, base=None):
+    """Species that get their own color: those reaching s['min_plotted'] anywhere in `cov`,
+    largest peak first, at most s['max_named']. Colors follow the species, not the rank:
+    a species already in `base` ({species: color}, e.g. from the surface-composition figure)
+    keeps that color, and the others take the unused palette slots in fixed order.
+    Returns (named species, {species: color})."""
+    base = dict(base or {})
+    peak = cov.drop(columns=[site], errors='ignore').max()
+    own = list(peak[peak >= s['min_plotted']].sort_values(ascending=False).index)
+    free = [c for c in P.SERIES_COLORS if c not in base.values()]
+    named, colors = [], {}
+    for sp in own:
+        if len(named) == s['max_named']:
+            break
+        if sp in base:
+            colors[sp] = base[sp]
+        elif free:
+            colors[sp] = free.pop(0)
+        else:
+            continue                                   # out of slots: folds into "other"
+        named.append(sp)
+    return named, colors
+
+
 def run(ctx):
     s = ctx.cfg.composition
     ctx.log('\n== composition ==')
@@ -43,11 +67,13 @@ def run(ctx):
         ctx.log(f'  --- {basis}, {T:.0f} K ---')
         for case, rows in part.groupby('case', sort=False):
             ctx.log(f'    {case:10s} ' + ', '.join(f'{r.species} {r.coverage:.3f}' for r in rows.itertuples()))
+    colors = {}
     for basis in cov.index.get_level_values('basis').unique():
-        fig = plot_surface_composition(ctx, cov, basis)
+        fig, colors[basis] = plot_surface_composition(ctx, cov, basis)
         P.save(fig, ctx.path(f'surface_composition{"" if basis == "fixed_probe" else "_" + basis}.png'), ctx.cfg)
         plt.close(fig)
-    ctx.outputs['composition'] = {'coverages': cov, 'on_surface': on_surface}
+    ctx.outputs['composition'] = {'coverages': cov, 'on_surface': on_surface,
+                                  'colors': colors.get('fixed_probe', {})}
     return ctx.outputs['composition']
 
 
@@ -55,10 +81,7 @@ def plot_surface_composition(ctx, cov, basis='fixed_probe'):
     model, s = ctx.model, ctx.cfg.composition
     site = model.site
     data = cov.xs(basis, level='basis')
-    adsorbates = data.drop(columns=[site], errors='ignore')
-    peak = adsorbates.max()
-    named = list(peak[peak >= s['min_plotted']].sort_values(ascending=False).index[:s['max_named']])
-    colors = dict(zip(named, P.SERIES_COLORS))
+    named, colors = species_palette(data, site, s)
     order = C.case_labels(ctx.cfg)
 
     temps = sorted(data.index.get_level_values('T_K').unique())
@@ -85,4 +108,4 @@ def plot_surface_composition(ctx, cov, basis='fixed_probe'):
                frameon=False, fontsize=9, title='Surface species', title_fontsize=9)
     fig.suptitle(f'What covers the surface at steady state ({basis})', x=0.01, ha='left', fontsize=11)
     fig.tight_layout()
-    return fig
+    return fig, colors

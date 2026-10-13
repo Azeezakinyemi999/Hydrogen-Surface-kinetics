@@ -45,7 +45,8 @@ def test_files_written(ctx):
     for name in ('steady_state_results.csv', 'rates_summary.pdf', 'rates_summary.png', 'surface_composition.png',
                  'mechanism_binding_check.csv', 'mechanism_switch_off.csv', 'top_reactions.csv',
                  'poisoning_curves.csv', 'poisoning_curves.png', 'temperature_sweep.csv', 'reaction_orders.csv',
-                 'sensitivity.csv', 'poisoning_over_time.csv', 'poisoning_over_time.png'):
+                 'sensitivity.csv', 'poisoning_over_time.csv', 'poisoning_over_time.png',
+                 'binding_check.pdf', 'rate_control.pdf', 'sweep_coverages.pdf', 'poisoning_tolerance.csv'):
         assert os.path.exists(os.path.join(out, name)), name
     assert os.listdir(os.path.join(out, 'reaction_paths'))
 
@@ -94,3 +95,13 @@ def test_cli(ctx, capsys):
 def test_unknown_analysis(tmp_path):
     with pytest.raises(hsk.ConfigError, match='unknown analyses'):
         hsk.load_config(write_input(tmp_path, TOY_INPUT, "analyses = ['steady', 'sweep']\n"))
+
+
+def test_species_colors_follow_the_species(ctx):
+    """A species keeps its surface-composition color in the coverage-vs-temperature figure."""
+    from hydrogen_surface_kinetics.analyses.composition import species_palette
+    base = ctx.outputs['composition']['colors']
+    cov = ctx.outputs['sweep']['coverages']
+    named, colors = species_palette(cov, ctx.model.site, ctx.cfg.composition, base)
+    assert all(colors[sp] == base[sp] for sp in named if sp in base)
+    assert len(set(colors.values())) == len(colors)            # no two species share a color

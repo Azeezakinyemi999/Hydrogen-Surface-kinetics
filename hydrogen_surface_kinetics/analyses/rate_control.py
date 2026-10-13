@@ -6,14 +6,20 @@ Stage 11d).
                                         held fixed via rate multipliers)
 Every perturbed steady state starts from a clean surface: a warm start from the base
 looks converged at once and misses slow re-equilibration.
-Output: sensitivity.csv.
+Outputs: sensitivity.csv; rate_control.png (TRC per case, plus the reaction orders when the
+'orders' analysis has run).
 """
+import os
+
 import cantera as ct
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+from .. import plotting as P
 from .. import solver as S
-from ..labels import species_label
+from ..conditions import case_labels
+from ..labels import probe_label, species_label
 from . import common
 
 
@@ -115,5 +121,91 @@ def run(ctx):
         ctx.log(f'  --- {kind}, {case}, {T:.0f} K (sum of X on forward TOF = {part["X_tof_fwd"].sum():.3f}) ---')
         ctx.log(part[['X_tof_fwd', 'X_probe_consumed', 'methods', 'label']].head(8)
                 .to_string(index=False, float_format=lambda v: f'{v:+.3f}'))
+    orders = orders_table(ctx)
+    fig = plot_rate_control(ctx, sens, orders)
+    if fig is not None:
+        P.save(fig, ctx.path('rate_control.png'), cfg)
+        plt.close(fig)
     ctx.outputs['rate_control'] = {'base': base, 'perturbed': pert, 'sensitivity': sens}
     return ctx.outputs['rate_control']
+
+
+def orders_table(ctx):
+    """Reaction orders from this run, or from an earlier run's reaction_orders.csv."""
+    if 'orders' in ctx.outputs:
+        return ctx.outputs['orders']['orders']
+    path = ctx.path('reaction_orders.csv')
+    if os.path.exists(path):
+        ctx.log('  reaction orders for the figure: from reaction_orders.csv of an earlier run')
+        return pd.read_csv(path)
+    return None
+
+
+def plot_rate_control(ctx, sens, orders=None, min_abs=0.01):
+    """Top: TRC of the forward probe rate, one panel per (T, case), species with |X| >= min_abs.
+    Bottom (if orders are given): reaction orders in the probe gas and the impurity, per T."""
+    trc = sens[sens['kind'] == 'TRC']
+    if trc.empty:
+        return None
+    order = case_labels(ctx.cfg)
+    temps = sorted(trc['T_K'].unique())
+    cases = [c for c in order if c in set(trc['case'])]
+    ord_T = [] if orders is None else [T for T in temps if T in set(orders['T_K'])]
+    ncol = len(cases)
+    mosaic = ([[f't{i}_{j}' for j in range(ncol)] for i in range(len(temps))]
+              + [[f'o{i}'] * ncol for i in range(len(ord_T))])
+    fig, axd = plt.subplot_mosaic(mosaic, figsize=(max(3.4 * ncol, 8.0), 2.7 * len(temps) + 3.2 * len(ord_T)),
+                                  height_ratios=[1.0] * len(temps) + [1.15] * len(ord_T))
+    xmin = min(-2.2, trc['X_tof_fwd'].min() * 1.15)
+    xmax = max(0.75, trc['X_tof_fwd'].max() * 1.15 + 0.6)
+    for i, T in enumerate(temps):
+        for j, case in enumerate(cases):
+            ax = axd[f't{i}_{j}']
+            part = trc[(trc['T_K'] == T) & (trc['case'] == case)]
+            show = part[part['X_tof_fwd'].abs() >= min_abs].sort_values('X_tof_fwd', key=abs, ascending=False)
+            y = np.arange(len(show))[::-1]
+            ax.barh(y, show['X_tof_fwd'], height=0.6, color=P.SERIES_COLORS[0], zorder=2)
+            for yi, x in zip(y, show['X_tof_fwd']):              # values beside the zero line, clear of the names
+                ax.annotate(P.signed(x), (max(x, 0), yi), xytext=(4, 0), textcoords='offset points',
+                            ha='left', va='center', fontsize=8, color=P.SECONDARY_INK)
+            ax.set_yticks(y, [l.split('  [')[0] for l in show['label']])
+            ax.set_ylim(-0.6, max(len(show), 2) - 0.4)
+            ax.axvline(0, color=P.MUTED, lw=0.8, zorder=1)
+            ax.set_xlim(xmin, xmax)
+            ax.set_xlabel(f'$X_{{TRC}}$ of the forward rate (sum {P.signed(part["X_tof_fwd"].sum())})',
+                          fontsize=9, color=P.INK)
+            P.style_axis(ax)
+            P.keep_title(ax, f'{case}, {T:.0f} K')
+            ax.grid(axis='y', visible=False)
+            ax.grid(axis='x', color=P.GRID, linewidth=0.6)
+    probe = probe_label(ctx.model)
+    for i, T in enumerate(ord_T):
+        ax = axd[f'o{i}']
+        o = orders[orders['T_K'] == T].set_index('case')
+        cs = [c for c in order if c in o.index]
+        x = np.arange(len(cs))
+        for col, dx, color, marker, lab in (('order_probe', -0.12, P.SERIES_COLORS[0], 'o', f'order in {probe}'),
+                                           ('order_impurity', 0.12, P.SERIES_COLORS[1], 's', 'order in the impurity')):
+            vals = o.loc[cs, col].to_numpy(dtype=float)
+            ax.plot(x + dx, vals, ls='', marker=marker, ms=8, color=color, mec='white', mew=0.8, zorder=3,
+                    label=lab if i == 0 else None)
+            for xi, v in zip(x + dx, vals):
+                if np.isfinite(v) and abs(v) >= 0.1:                   # label only the orders that matter
+                    ax.annotate(P.signed(v), (xi, v), xytext=(0, 7 if v > 0 else -7), textcoords='offset points',
+                                ha='center', va='bottom' if v > 0 else 'top', fontsize=8, color=P.SECONDARY_INK)
+        ax.axhline(0, color=P.MUTED, lw=0.8, zorder=1)
+        ax.set_xticks(x, cs)
+        ax.set_xlim(-0.6, len(cs) - 0.4)
+        lo = np.nanmin(o[['order_probe', 'order_impurity']].to_numpy(dtype=float))
+        hi = np.nanmax(o[['order_probe', 'order_impurity']].to_numpy(dtype=float))
+        ax.set_ylim(min(lo, -0.5) - 0.5, max(hi, 0.5) + 0.5)
+        P.style_axis(ax, ylabel='reaction order  d ln TOF / d ln p')
+        P.keep_title(ax, f'reaction orders, {T:.0f} K')
+    if ord_T:
+        handles, labels = axd['o0'].get_legend_handles_labels()
+        fig.legend(handles, labels, loc='upper center', bbox_to_anchor=(0.5, 1.02), ncol=len(labels),
+                   frameon=False, fontsize=9)
+    fig.suptitle('What controls the rate: thermodynamic rate control and reaction orders', x=0.01, ha='left',
+                 fontsize=11)
+    fig.tight_layout(rect=(0, 0, 1, 0.95))
+    return fig

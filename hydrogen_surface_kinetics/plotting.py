@@ -16,6 +16,8 @@ import numpy as np
 SERIES_COLORS = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#4a3aa7', '#e34948']
 EMPTY_COLOR, OTHER_COLOR = '#e4e3dd', '#8a8983'
 INK, MUTED, GRID = '#33322f', '#8a8983', '#e4e3dd'
+SECONDARY_INK, RANGE_COLOR = '#52514e', '#c3c2b7'
+DIVERGING_LOW, DIVERGING_HIGH = '#2a78d6', '#e34948'   # blue <-> red poles; neutral midpoint = ink
 MARKERS = ['o', 's', 'D', '^', 'v', 'P', 'X', '*']
 PUB_FONT_PT = 7
 PUB_MAX_HEIGHT_CM = 22.0          # printable page height
@@ -43,6 +45,20 @@ def style_axis(ax, title='', ylabel=''):
     ax.tick_params(colors='#55544f', labelsize=9)
     ax.grid(axis='y', color=GRID, linewidth=0.6)
     ax.set_axisbelow(True)
+
+
+def keep_title(ax, text):
+    """A panel title that names the panel's condition (case, temperature): the publication
+    style keeps it, while descriptive titles move to the caption."""
+    ax.set_title(text, fontsize=11, loc='left', color=INK)
+    ax._hsk_keep_title = True
+
+
+HALF_MARK = dict(ls='', marker='D', ms=7, mfc='white', mew=1.5, zorder=4)   # 'rate halved here' marker
+
+
+def half_mark_handle(label):
+    return plt.Line2D([], [], **{**HALF_MARK, 'mec': INK}, label=label)
 
 
 def two_states_handle():
@@ -84,7 +100,8 @@ def _publication(fig, width_cm):
     for i, ax in enumerate(axes):
         title = re.sub(r'^\s*[a-z]\)\s*', '', ax.get_title(loc='left'))
         title = title.split(':')[0]                         # keep condition titles ("300 K", "CO, 300 K")
-        title = title if re.search(r'\d\s*K\b', title) else ''
+        if not (getattr(ax, '_hsk_keep_title', False) or re.search(r'\d\s*K\b', title)):
+            title = ''
         letter = rf'$\bf{{({chr(97 + i)})}}$ ' if len(axes) > 1 else ''
         ax.set_title(letter + sub(title), loc='left', fontsize=PUB_FONT_PT + 1)
         for axis, set_ticks in ((ax.xaxis, ax.set_xticks), (ax.yaxis, ax.set_yticks)):   # category labels
@@ -151,6 +168,11 @@ def save(fig, path, cfg=None, style=None):
         fig.savefig(stem + '.png', dpi=300, bbox_inches='tight')
         written.append(stem + '.png')
     return written
+
+
+def signed(x, digits=2):
+    """'+1.00' / '−2.00' with a true minus sign."""
+    return f'{x:+.{digits}f}'.replace('-', '\u2212')
 
 
 def log_floor(values, floor=1e-12):
