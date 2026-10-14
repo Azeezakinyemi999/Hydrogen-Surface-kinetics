@@ -103,6 +103,13 @@ ANALYSIS_DEFAULTS = dict(
         threshold=1e-8,             # hide fluxes below this fraction of the largest
         flow_type='OneWayFlow',     # 'OneWayFlow' (needed near equilibrium) or 'NetFlow'
         formats=['png'],            # Graphviz output formats, e.g. ['png', 'pdf']
+        species_images=None,        # folder of <Cantera name>.png; None = species/ next to settings.py,
+                                    #   else output/flux_species/; False = text labels only
+        image_names=False,          # print the readable name under each structure image
+        orientation='TB',           # 'TB' (top to bottom) or 'LR' (left to right)
+        edge_labels=True,           # relative-flux numbers on the arrows (False = cleaner; widths still show flux)
+        style='rmg',                # 'rmg' (RMG's flux-diagram look: black arrows, outlines ~ log of coverage /
+                                    #   mole fraction) or 'cantera' (Cantera's colors and widths)
         **SERIES_DEFAULTS,
     ),
     transients=dict(

@@ -166,3 +166,25 @@ def test_per_impurity_ratio_errors(tmp_path):
     with pytest.raises(hsk.ConfigError, match="mixture_mode = 'split' needs one number"):
         hsk.load_config(write_settings(tmp_path, TOY_SETTINGS, TWO_IMPURITIES
                                        + "impurity_ratio = {'I': 0.1, 'AI': 0.2}\nmixture_mode = 'split'\n"))
+
+
+def test_path_diagram_styles(tmp_path):
+    from PIL import Image
+    from hydrogen_surface_kinetics.analyses import paths
+    m = hsk.Model(hsk.load_config(write_settings(tmp_path)))
+    Image.new('RGB', (20, 40), 'white').save(tmp_path / 'A(s).png')          # an image for A(s) only
+    raw = ('digraph reaction_paths {\ncenter=1;\n'
+           's1 -> s2[fontname="Helvetica", penwidth=6, arrowsize=3, color="0.7, 1.5, 0.9"\n, label = " 1"];\n'
+           's2 -> s1[fontname="Helvetica", penwidth=2, arrowsize=1, color="0.7, 0.5, 0.9"\n, label = " 1e-07"];\n'
+           's1 [ fontname="Helvetica", label="A2"];\ns2 [ fontname="Helvetica", label="A(s)"];\n'
+           ' label = "Scale = 1\\l t (OneWayFlow, width ~ flux, threshold 1e-08 of max; labels = flux / max flux)";\n'
+           ' fontname = "Helvetica";\n}\n')
+    rmg = paths.style_dot(m, raw, str(tmp_path), image_names=False, orientation='TB', edge_labels=True,
+                          style='rmg', amounts={'A2': 1.0, 'A(s)': 0.5}, threshold=1e-8)
+    assert 'IMG SRC="' + str(tmp_path / 'A(s).png') in rmg                  # image node for A(s)
+    assert 'label="A2"' in rmg                                              # no image: readable name
+    assert rmg.count('color="black"') >= 2 and '0.7, 1.5, 0.9' not in rmg    # RMG look: black arrows
+    assert 'penwidth=8.00' in rmg and 'penwidth=1.00' in rmg                # log widths: 1 -> 8 pt, 1e-7 -> 1 pt
+    assert 'label=" 1e-07"' in rmg                                          # numbers kept
+    clean = paths.style_dot(m, raw, None, orientation='LR', edge_labels=False)
+    assert 'rankdir="LR"' in clean and 'label = " 1"' not in clean and 'arrowsize=1.40' in clean
