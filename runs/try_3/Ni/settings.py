@@ -56,7 +56,7 @@ mixture_mode = 'same_each'
 include_input_basis = False
 
 # --- What to run -----------------------------------------------------------------------
-analyses = ['steady_state', 'composition', 'diagnostics', 'convergence', 'curves', 'sweep',
+analyses = ['steady_state', 'composition', 'diagnostics', 'convergence', 'curves', 'sweep', 'arrhenius',
             'pressure_sweep', 'orders', 'rate_control', 'paths', 'transients']
 plot_style = 'publication'
 

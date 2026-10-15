@@ -60,6 +60,8 @@ def counts(ctx, names):
     if 'sweep' in names:
         add('sweep', len(sweep.sweep_temperatures(ctx)), *_exact(ctx, sweep.sweep_conditions(ctx)),
             'temperature only, at reference_pressure')
+    if 'arrhenius' in names:
+        add('arrhenius', 0, 0, 0, 'no solving: rate constants from the mechanism, fits of the temperature sweep')
     if 'pressure_sweep' in names:
         n_pts = len(pressure_sweep.sweep_pressures(ctx)) * len(pressure_sweep.sweep_temperatures(ctx))
         add('pressure_sweep', n_pts, *_exact(ctx, pressure_sweep.sweep_conditions(ctx)),
