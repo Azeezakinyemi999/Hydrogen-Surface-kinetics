@@ -80,6 +80,10 @@ ANALYSIS_DEFAULTS = dict(
         ratio=None,                 # None = impurity_ratio
         impurities=None,            # None = every impurity, plus the all-impurities mixture
     ),
+    arrhenius=dict(
+        temperatures=None,          # K; None = the temperature sweep's temperatures
+        min_r2=0.99,                # fits below this R^2 are flagged 'curved': read the local Ea instead
+    ),
     pressure_sweep=dict(
         pressures=None,             # Pa; None = a log grid over the pressure series (plus reference_pressure),
         per_decade=2,               #   per_decade points; without a pressure series, 1/100 to 100 x reference

@@ -218,3 +218,27 @@ def test_path_diagram_styles(tmp_path):
     assert 'label=" 1e-07"' in rmg                                          # numbers kept
     clean = paths.style_dot(m, raw, None, orientation='LR', edge_labels=False)
     assert 'rankdir="LR"' in clean and 'label = " 1"' not in clean and 'arrowsize=1.40' in clean
+
+
+def test_arrhenius_fit_and_intrinsic_constants(tmp_path):
+    import cantera as ct
+    from hydrogen_surface_kinetics.analyses import arrhenius as AR
+    from hydrogen_surface_kinetics.analyses.common import Context
+    T = np.array([400.0, 500.0, 600.0, 800.0])
+    f = AR.fit(T, 3e7 * np.exp(-60e6 / (ct.gas_constant * T)))      # A = 3e7 1/s, Ea = 60 kJ/mol
+    assert f['A'] == pytest.approx(3e7, rel=1e-9) and f['Ea_kJ_per_mol'] == pytest.approx(60.0, rel=1e-9)
+    assert f['R2'] == pytest.approx(1.0) and f['n_points'] == 4
+    assert np.allclose(AR.local_ea(T, 3e7 * np.exp(-60e6 / (ct.gas_constant * T))), 60.0, rtol=0.02)
+    assert np.isnan(AR.fit([500.0], [1.0])['Ea_kJ_per_mol'])         # one point: no fit
+    cfg = hsk.load_config(write_settings(tmp_path))
+    ctx = Context(hsk.Model(cfg), log=lambda *a: None)
+    intr = AR.intrinsic_table(ctx, [450.0, 500.0, 600.0])
+    m = ctx.model
+    for row in intr.itertuples():                                    # K = Kc P0 / RT, from Cantera itself
+        surf = m.new_surface()
+        m.gas.TP = row.T_K, cfg.reference_pressure
+        surf.TP = row.T_K, cfg.reference_pressure
+        Kc = surf.equilibrium_constants[m.i_probe]
+        assert row.K_eq == pytest.approx(Kc * AR.P0 / (ct.gas_constant * row.T_K), rel=1e-9)
+    vh = AR.fit(intr['T_K'], intr['K_eq'])                           # van 't Hoff dH vs the mechanism's thermo
+    assert vh['Ea_kJ_per_mol'] == pytest.approx(intr['dH_thermo_kJ_per_mol'].mean(), abs=3.0)

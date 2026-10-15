@@ -15,7 +15,7 @@ from conftest import TOY_SETTINGS, write_settings
 
 SMALL = """
 pressures = [3e4, 3e5]                # pressure series at 500 K: 0.3, 1 (shared) and 3 bar
-analyses = ['steady_state', 'composition', 'diagnostics', 'convergence', 'curves', 'sweep', 'pressure_sweep',
+analyses = ['steady_state', 'composition', 'diagnostics', 'convergence', 'curves', 'sweep', 'arrhenius', 'pressure_sweep',
             'orders', 'rate_control', 'paths', 'transients']
 plot_style = 'publication'
 diagnostics = {'adsorption_checks': [('A2 -> 2 A*', {'A2': 1, 'S': 2}, {'A(s)': 2}, (-100, -60), 'made up')],
@@ -161,3 +161,16 @@ def test_two_branches_and_site_blocking(ctx):
     assert (np.abs(np.log(two['poisoning_factor_B'] / two['poisoning_factor'])) > 0.1).all()
     ok = c[c['converged'] & (c['case'] == 'I')]
     assert np.allclose(ok['poisoning_factor'], ok['blocking_full'], rtol=1e-6)   # elementary step: blocking only
+
+
+def test_arrhenius(ctx):
+    fits = ctx.outputs['arrhenius']['fits']
+    assert set(fits['level']) == {'intrinsic', 'observed'}
+    obs = fits[fits['level'] == 'observed']
+    assert set(obs['case']) == {'probe only', 'I'} and (obs['n_points'] == 3).all()
+    ref = obs[obs['case'] == 'probe only']
+    assert np.allclose(ref['dEa_vs_reference_kJ_per_mol'], 0.0) and np.allclose(ref['A_over_reference'], 1.0)
+    assert all(c for c in obs['conditions'])                        # every fit states its conditions
+    out = ctx.cfg.output_dir
+    for name in ('arrhenius_intrinsic.csv', 'arrhenius_fits.csv', 'arrhenius_local.csv', 'arrhenius.pdf'):
+        assert os.path.exists(os.path.join(out, name)), name
