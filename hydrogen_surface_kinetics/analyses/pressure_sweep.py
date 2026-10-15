@@ -9,14 +9,17 @@ Reports the rate against p (log-log); the local slope d ln TOF / d ln p (for the
 case the order in the probe gas; for impurity cases every partial pressure moves together,
 so it is the order in the total pressure at fixed purity); the poisoning factor against p,
 and the half-rate pressure where it crosses 0.5.
-Outputs: pressure_sweep.csv, half_rate_pressure.csv, pressure_sweep.png,
-pressure_sweep_coverages_<T>K.png.
+Outputs: pressure_sweep.csv, half_rate_pressure.csv, pressure_sweep.png and
+pressure_sweep_per_area.png (Format 2: panel (a) is the dissociation flux J_diss),
+surface_exchange_vs_P.png (sticking probability, exchange flux and hydrogen on the surface
+against p), pressure_sweep_coverages_<T>K.png.
 """
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
 from .. import conditions as C
+from .. import per_area as PA
 from .. import plotting as P
 from ..labels import probe_label
 from . import common
@@ -102,6 +105,8 @@ def run(ctx):
         ctx.log('  needs attention:\n' + bad[['T_K', 'P_ref_bar', 'case', 'converged', 'starts_agree']]
                 .to_string(index=False))
     P.save_parts(plot_pressure_sweep(ctx, df, half), ctx.path('pressure_sweep.png'), cfg)
+    P.save_parts(plot_pressure_sweep(ctx, df, half, per_area=True), ctx.path('pressure_sweep_per_area.png'), cfg)
+    P.save_parts(plot_surface_exchange(ctx, df), ctx.path('surface_exchange_vs_P.png'), cfg)
     cov = coverage_table(ctx, results).droplevel(['basis', 'series'])
     cases = [c for c in common.sweep_cases(ctx, 'pressure_sweep') if c in set(cov.index.get_level_values('case'))]
     for T in sweep_temperatures(ctx):
@@ -116,15 +121,15 @@ def run(ctx):
     return ctx.outputs['pressure_sweep']
 
 
-def plot_pressure_sweep(ctx, sweep, half=None):
-    """One row per temperature: (a) forward TOF against p (log-log), (b) local slope,
-    (c) poisoning factor with the half-rate pressures. Returns the figures (at most three
-    rows each)."""
-    return [_pressure_sweep_page(ctx, sweep, half, temps)
+def plot_pressure_sweep(ctx, sweep, half=None, per_area=False):
+    """One row per temperature: (a) forward TOF against p (log-log; per_area: the
+    dissociation flux J_diss, mol per m2 per s), (b) local slope, (c) poisoning factor with
+    the half-rate pressures. Returns the figures (at most three rows each)."""
+    return [_pressure_sweep_page(ctx, sweep, half, temps, per_area)
             for temps in P.pages(sorted(sweep['T_K'].unique()), P.rows_per_page(3))]
 
 
-def _pressure_sweep_page(ctx, sweep, half, temps):
+def _pressure_sweep_page(ctx, sweep, half, temps, per_area=False):
     cfg = ctx.cfg
     probe = probe_label(ctx.model)
     cases = common.sweep_cases(ctx, 'pressure_sweep')
@@ -137,8 +142,9 @@ def _pressure_sweep_page(ctx, sweep, half, temps):
                 continue
             two = (d['starts_agree'] == False).to_numpy()              # noqa: E712
             style = dict(color=colors[case], ms=4.5, lw=1.6, label=case)
-            row[0].plot(d['P_ref_bar'], d['tof_fwd'], '-o', **style)
-            row[0].plot(d['P_ref_bar'].to_numpy()[two], d['tof_fwd'].to_numpy()[two], 'o', ms=9, mfc='none',
+            rate = d['J_diss_mol_m2_s'] if per_area else d['tof_fwd']
+            row[0].plot(d['P_ref_bar'], rate, '-o', **style)
+            row[0].plot(d['P_ref_bar'].to_numpy()[two], rate.to_numpy()[two], 'o', ms=9, mfc='none',
                         mec=P.INK, mew=1.2)
             row[1].plot(d['P_ref_bar'], d['slope_dlnTOF_dlnp'], '-o', **style)
             if case != cfg.reference_label:
@@ -151,7 +157,11 @@ def _pressure_sweep_page(ctx, sweep, half, temps):
             ax.set_xscale('log')
             ax.set_xlabel(f'p({probe}) (bar)')
         row[0].set_yscale('log')
-        P.style_axis(row[0], f'{T:.0f} K: forward {probe} dissociation rate', 'TOF (1/s)')
+        if per_area:
+            P.style_axis(row[0], f'{T:.0f} K: {probe} dissociation flux', PA.axis_label(
+                '$J_\\mathrm{diss}$', f'mol {P.sub(probe)} m$^{{-2}}$ s$^{{-1}}$', ctx.model))
+        else:
+            P.style_axis(row[0], f'{T:.0f} K: forward {probe} dissociation rate', 'TOF (1/s)')
         row[1].axhline(0, color=P.MUTED, lw=0.8)
         P.style_axis(row[1], f'{T:.0f} K: local slope', 'd ln TOF / d ln p')
         row[2].axhline(0.5, color=P.MUTED, lw=1, ls='--')
@@ -165,5 +175,45 @@ def _pressure_sweep_page(ctx, sweep, half, temps):
     labels.append('two steady states')
     fig.legend(handles, labels, loc='upper center', bbox_to_anchor=(0.5, 1.02), ncol=len(labels), frameon=False,
                fontsize=9)
+    fig.tight_layout(rect=(0, 0, 1, 0.94 if len(temps) == 1 else 0.97))
+    return fig
+
+
+def plot_surface_exchange(ctx, sweep):
+    """One row per temperature, against p: (a) sticking probability gamma_eff, (b) exchange
+    flux J_ex, (c) hydrogen on the surface C_H; dashed: the clean surface from the mechanism
+    (its sticking coefficient, and J0 and C_H,eq at the equilibrium coverage). Returns the
+    figures (at most three rows each)."""
+    return [_surface_exchange_page(ctx, sweep, temps)
+            for temps in P.pages(sorted(sweep['T_K'].unique()), P.rows_per_page(3))]
+
+
+def _surface_exchange_page(ctx, sweep, temps):
+    cfg, model = ctx.cfg, ctx.model
+    probe = probe_label(model)
+    cases = common.sweep_cases(ctx, 'pressure_sweep')
+    colors = P.colors_for(cases, first=cfg.reference_label)
+    flux = f'mol {P.sub(probe)} m$^{{-2}}$ s$^{{-1}}$'
+    fig, axes = plt.subplots(len(temps), 3, figsize=(15, 4.4 * len(temps)), squeeze=False)
+    for row, T in zip(axes, temps):
+        for case in cases:
+            d = sweep[(sweep['case'] == case) & (sweep['T_K'] == T) & sweep['converged'].astype(bool)].sort_values('P_ref_bar')
+            if d.empty:
+                continue
+            style = dict(color=colors[case], ms=4.5, lw=1.6, label=case)
+            for ax, col in zip(row, ('gamma_eff', 'J_exchange_mol_m2_s', 'C_H_mol_m2')):
+                ax.plot(d['P_ref_bar'], d[col], '-o', **style)
+        Ps = sorted(sweep[sweep['T_K'] == T]['P_ref_bar'].unique())
+        clean = [PA.clean_surface(model, T, Pb * 1e5) for Pb in Ps]
+        for ax, key in zip(row, ('gamma_clean', 'J0_clean_mol_m2_s', 'C_H_eq_mol_m2')):
+            ax.plot(Ps, [c[key] for c in clean], color=P.MUTED, ls='--', lw=1.4, label='clean surface (mechanism)')
+            ax.set_xscale('log')
+            ax.set_yscale('log')
+            ax.set_xlabel(f'p({probe}) (bar)')
+        P.style_axis(row[0], f'{T:.0f} K: sticking probability', '$\\gamma_\\mathrm{eff}$ = $J_\\mathrm{diss}$ / Z')
+        P.style_axis(row[1], f'{T:.0f} K: exchange flux', PA.axis_label('$J_\\mathrm{ex}$', flux, model))
+        P.style_axis(row[2], f'{T:.0f} K: hydrogen on the surface', PA.axis_label('$C_\\mathrm{H}$', 'mol H m$^{-2}$', model))
+    handles, labels = axes[0][0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc='upper center', bbox_to_anchor=(0.5, 1.02), ncol=len(labels), frameon=False, fontsize=9)
     fig.tight_layout(rect=(0, 0, 1, 0.94 if len(temps) == 1 else 0.97))
     return fig

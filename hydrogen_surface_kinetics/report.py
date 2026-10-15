@@ -23,6 +23,7 @@ import numpy as np
 import pandas as pd
 
 from . import __version__
+from . import per_area as PA
 from . import report_text as RT
 from .config import ANALYSIS_ORDER, DEFAULTS, REPORT_DEFAULTS, load_config
 
@@ -38,8 +39,11 @@ SECTION_OUTPUTS = {
     'convergence': ['convergence.csv', 'convergence*.p[dn][fg]'],
     'curves': ['poisoning_curves.csv', 'poisoning_tolerance.csv', 'poisoning_curves_vs_*.p[dn][fg]', 'site_blocking*.p[dn][fg]'],
     'sweep': ['temperature_sweep.csv', 'release_temperature.csv', 'temperature_sweep*.p[dn][fg]', 'sweep_coverages*.p[dn][fg]'],
-    'arrhenius': ['arrhenius_fits.csv', 'arrhenius_intrinsic.csv', 'arrhenius_local.csv', 'arrhenius*.p[dn][fg]'],
-    'pressure_sweep': ['pressure_sweep.csv', 'half_rate_pressure.csv', 'pressure_sweep*.p[dn][fg]'],
+    'arrhenius': ['arrhenius_fits.csv', 'arrhenius_intrinsic.csv', 'arrhenius_local.csv', 'surface_coefficients.csv',
+                  'arrhenius*.p[dn][fg]', 'surface_exchange_vs_T*.p[dn][fg]'],
+    'pressure_sweep': ['pressure_sweep.csv', 'half_rate_pressure.csv', 'pressure_sweep*.p[dn][fg]', 'surface_exchange_vs_P*.p[dn][fg]'],
+    'equilibrium': ['equilibrium_coverage.csv', 'half_coverage_temperature.csv', 'equilibrium_check.csv',
+                    'equilibrium_coverage*.p[dn][fg]'],
     'orders': ['reaction_orders.csv', 'reaction_orders_vs_*.p[dn][fg]'],
     'rate_control': ['sensitivity.csv', 'rate_control_*.p[dn][fg]'],
     'paths': ['reaction_paths/path_*.p[dn][fg]'],
@@ -549,6 +553,7 @@ def preamble(rep, title):
         r'\usepackage{longtable,array,makecell}', r'\usepackage{xcolor}', r'\usepackage{float}',
         r'\usepackage{caption}', r'\usepackage{enumitem}', r'\usepackage{pdflscape}', r'\usepackage{listings}',
         r'\usepackage[hidelinks]{hyperref}',
+        r'\expandafter\def\expandafter\UrlBreaks\expandafter{\UrlBreaks\do\-}',    # long paths may also break at '-'
         r'\newcommand{\thickhline}{\noalign{\global\arrayrulewidth=0.9pt}\hline\noalign{\global\arrayrulewidth=0.4pt}}',
         r'\renewcommand{\arraystretch}{1.18}', r'\setlength{\parindent}{0pt}', r'\setlength{\parskip}{4pt}',
         r'\setlength{\LTpre}{6pt}', r'\setlength{\LTpost}{8pt}',
@@ -605,7 +610,10 @@ def run_summary(rep, built):
                     ('probe adsorbate', tex_file(cfg.probe_adsorbate)),
                     ('molecular adsorbate', tex_file(cfg.molecular_adsorbate) if cfg.molecular_adsorbate else 'none'),
                     ('probe reaction', f'\\#{model.i_probe}: ' + tex_escape(rxn.equation)
-                     + (' (written as desorption; read in the adsorption direction)' if model.sign_probe == -1 else ''))]
+                     + (' (written as desorption; read in the adsorption direction)' if model.sign_probe == -1 else '')),
+                    ('per area (Format 2)', r'$\Gamma$ = ' + tex_num(PA.site_density_mol_m2(model)) + r' mol m$^{-2}$ (per atomic '
+                     r'area of the mechanism\textquotesingle s facet; literature values per geometric area can be higher by a '
+                     r'roughness factor); molar mass of the probe gas ' + tex_num(PA.molar_mass_kg_mol(model) * 1e3) + ' g/mol')]
         out += [r'\subsection{The system}', r'\begin{tabular}{|l|>{\raggedright\arraybackslash}p{12cm}|}\hline',
                 '\n'.join(r'\textbf{' + k + '} & ' + v + r' \\ \hline' for k, v in sys_rows), r'\end{tabular}']
 
@@ -770,7 +778,15 @@ def section_steady_state(rep):
         tables = [rep.series_tables(bdf, cols, 'Main steady states' + ('' if basis == 'fixed_probe' else ' (fixed mole-fraction basis)'),
                                     'steady_state_results.csv') for basis, bdf in ss.groupby('basis', sort=False)]
         parts.append(('All main steady states', '\n\n'.join(tables)))
-    parts += [('figure', 'rates_summary_vs_T', 'rates_summary_vs_T'), ('figure', 'rates_summary_vs_P', 'rates_summary_vs_P')]
+        if 'J_diss_mol_m2_s' in ss:
+            f2 = [rep.series_tables(bdf, F2_STEADY_COLS + [('status', 'status', 'l', tex_escape)],
+                                    'Main steady states per area (Format 2)' + ('' if basis == 'fixed_probe' else ', fixed mole-fraction basis'),
+                                    'steady_state_results.csv') for basis, bdf in ss.groupby('basis', sort=False)]
+            parts.append(('All main steady states per area (Format 2)', '\n\n'.join(f2)))
+    parts += [('figure', 'rates_summary_vs_T', 'rates_summary_vs_T'),
+              ('figure', 'rates_summary_vs_T_per_area', 'rates_summary_vs_T_per_area'),
+              ('figure', 'rates_summary_vs_P', 'rates_summary_vs_P'),
+              ('figure', 'rates_summary_vs_P_per_area', 'rates_summary_vs_P_per_area')]
     return rep.section('steady_state', parts)
 
 
@@ -997,7 +1013,8 @@ def section_sweep(rep):
     parts, keys = [], []
     if sw is not None and len(sw):
         sw = sw.assign(two=sw['status'] == 'two states')
-        sw.loc[~sw['converged'].astype(bool), ['tof_fwd', 'poisoning_factor', 'E_app_kJ_per_mol']] = np.nan
+        sw.loc[~sw['converged'].astype(bool), [c for c in ('tof_fwd', 'poisoning_factor', 'E_app_kJ_per_mol', 'kd_eff_mol_m2_s_Pa',
+                                                           'gamma_eff') if c in sw]] = np.nan
         temps = sorted(sw['T_K'].unique())
         parts.append(('What was computed', f'{len(temps)} temperatures from {temps[0]:g} to {temps[-1]:g} K at '
                                            f'$p$(\\probe) = {cfg.reference_pressure / 1e5:g} bar, {sw["case"].nunique()} cases '
@@ -1022,35 +1039,77 @@ def section_sweep(rep):
         parts.append(('Rates against temperature', sweep_pivots(rep, sw, 'T_K', '$T$ (K)', [
             ('tof_fwd', r'Dissociation TOF (s$^{-1}$) per temperature and case.', None),
             ('poisoning_factor', r'Poisoning factor $\Pi$ per temperature and impurity case.', None),
-            ('E_app_kJ_per_mol', r'Apparent activation energy $E_\mathrm{app}$ (kJ/mol).', tex_kj)], 'temperature_sweep.csv')))
-    parts += [('figure', 'temperature_sweep', 'temperature_sweep'), ('figure', 'sweep_coverages', 'sweep_coverages')]
+            ('E_app_kJ_per_mol', r'Apparent activation energy $E_\mathrm{app}$ (kJ/mol).', tex_kj),
+            ('kd_eff_mol_m2_s_Pa', r'Effective adsorption coefficient $k_{d,\mathrm{eff}}$ (mol m$^{-2}$ s$^{-1}$ Pa$^{-1}$; Format 2).', None),
+            ('gamma_eff', r'Sticking probability $\gamma_\mathrm{eff}$ (Format 2).', None)], 'temperature_sweep.csv')))
+    parts += [('figure', 'temperature_sweep', 'temperature_sweep'), ('figure', 'temperature_sweep_per_area', 'temperature_sweep_per_area'),
+              ('figure', 'sweep_coverages', 'sweep_coverages')]
     return rep.section('sweep', parts)
+
+
+def tex_units(u):
+    """'mol H2 m-2 s-1 Pa-1' -> LaTeX; '-' -> '--'."""
+    if is_missing(u) or str(u).strip() in ('-', ''):
+        return '--'
+    out = []
+    for tok in str(u).split():
+        m = re.fullmatch(r'([A-Za-z]+)(-?\d+)', tok)
+        if m and m.group(1) in ('m', 's', 'Pa', 'mol', 'K'):
+            out.append(f'{m.group(1)}$^{{{m.group(2)}}}$')
+        else:
+            out.append(tex_formula(tok))
+    return ' '.join(out)
+
+
+F2_STEADY_COLS = [('J_diss_mol_m2_s', r'$J_\mathrm{diss}$\\(mol m$^{-2}$ s$^{-1}$)', 'r', None),
+                  ('J_rec_mol_m2_s', r'$J_\mathrm{rec}$\\(mol m$^{-2}$ s$^{-1}$)', 'r', None),
+                  ('J_net_mol_m2_s', r'$J_\mathrm{net}$\\(mol m$^{-2}$ s$^{-1}$)', 'r', None),
+                  ('J_exchange_mol_m2_s', r'$J_\mathrm{ex}$\\(mol m$^{-2}$ s$^{-1}$)', 'r', None),
+                  ('kd_eff_mol_m2_s_Pa', r'$k_{d,\mathrm{eff}}$ (mol\\m$^{-2}$ s$^{-1}$ Pa$^{-1}$)', 'r', None),
+                  ('gamma_eff', r'$\gamma_\mathrm{eff}$', 'r', None),
+                  ('C_H_mol_m2', r'$C_\mathrm{H}$\\(mol H m$^{-2}$)', 'r', None)]
+PER_SITE_INTRINSIC = ('dissociation k_diss (intrinsic)', 'recombination k_rec (intrinsic)',
+                      'equilibrium K = k_diss / k_rec (intrinsic)')
+
+
+def is_format2(quantity):
+    return 'per area' in str(quantity) or 'sticking' in str(quantity)
 
 
 def section_arrhenius(rep):
     fits = rep.csv('arrhenius_fits.csv')
     intr = rep.csv('arrhenius_intrinsic.csv')
     loc = rep.csv('arrhenius_local.csv')
+    coeffs = rep.csv('surface_coefficients.csv')
     cfg = rep.cfg
     parts, keys = [], []
     if rep.model is not None:
         from .analyses.arrhenius import mechanism_parameters
         keys.append(r'The probe reaction in the mechanism: \texttt{' + tex_escape(mechanism_parameters(rep.model)) + '}.')
     if fits is not None and len(fits):
-        fits = fits.assign(expr=[tex_arrhenius(a, e) for a, e in zip(fits['A'], fits['Ea_kJ_per_mol'])],
-                           units=['--' if ('K =' in q or '/' in q) else 's$^{-1}$' for q in fits['quantity']],
+        units = (fits['units'].map(tex_units) if 'units' in fits else
+                 pd.Series(['--' if ('K =' in q or '/' in q) else 's$^{-1}$' for q in fits['quantity']], index=fits.index))
+        fits = fits.assign(expr=[tex_arrhenius(a, e) for a, e in zip(fits['A'], fits['Ea_kJ_per_mol'])], units=units,
                            T_range=[f'{a:g}--{b:g}' for a, b in zip(fits['T_min_K'], fits['T_max_K'])])
-        intrinsic = fits[fits['level'] == 'intrinsic']
-        for rec in intrinsic.to_dict('records'):
-            if 'K =' in rec['quantity']:
+        intrinsic = fits[fits['level'] == 'intrinsic'].set_index('quantity', drop=False)
+        for q in PER_SITE_INTRINSIC:
+            if q not in intrinsic.index:
+                continue
+            rec = intrinsic.loc[q]
+            if 'K =' in q:
                 keys.append(f"Equilibrium of the \\probe{{}} step: $K = $ {rec['expr']}, i.e.\\ "
                             f"$\\Delta H^\\circ$ = {tex_kj(rec['dH_kJ_per_mol'])} kJ/mol, $\\Delta S^\\circ$ = "
-                            f"{tex_num(rec['dS_J_per_mol_K'])} J/(mol K) ({rec['T_range']} K).")
+                            f"{tex_num(rec['dS_J_per_mol_K'])} J/(mol K) ({rec['T_range']} K; $P^\\circ$ = 1 bar).")
             else:
-                name = 'dissociation on the clean metal, $k_\\mathrm{diss}$' if 'diss' in rec['quantity'] else \
+                name = 'dissociation on the clean metal, $k_\\mathrm{diss}$' if 'diss' in q else \
                     'recombination from a full surface, $k_\\mathrm{rec}$'
                 keys.append(f"Intrinsic {name} = {rec['expr']} s$^{{-1}}$ per site ({rec['T_range']} K; "
                             f"{tex_escape(rec['conditions'])}).")
+        for q, text in (('adsorption coefficient k_d (intrinsic, per area)', 'Per area (Format 2): clean-surface adsorption coefficient $k_d$'),
+                        ('surface recombination coefficient k_r (intrinsic, per area)', 'surface recombination coefficient $k_r$')):
+            if q in intrinsic.index:
+                rec = intrinsic.loc[q]
+                keys.append(f"{text} = {rec['expr']} {rec['units']} ({rec['T_range']} K).")
         obs = fits[fits['level'] == 'observed']
         diss = obs[obs['quantity'].str.startswith('dissociation')]
         ref = diss[diss['case'] == cfg.reference_label]
@@ -1067,25 +1126,64 @@ def section_arrhenius(rep):
         if len(curved):
             keys.append('Curved (one $E_a$ does not fit the whole range; see the local values): '
                         + ', '.join(sorted({tex_escape(c) for c in curved['case']})) + '.')
+        if intr is not None and 'gamma_clean' in intr:
+            g = intr['gamma_clean']
+            keys.append('Sticking probability of a clean surface (the mechanism\\textquotesingle s sticking coefficient): '
+                        + (f'{tex_num(g.iloc[0])} at every temperature' if g.max() - g.min() <= 1e-9 * abs(g.max()) else
+                           f"{tex_num(g.min())} to {tex_num(g.max())} ({intr['T_K'].min():g}--{intr['T_K'].max():g} K)") + '.')
+        if intr is not None and 'check_K_thermo' in intr:
+            dev = (intr['check_K_thermo'] - 1).abs().max()
+            keys.append(f"$K$ from the rates against $K$ from the thermochemistry: within {tex_num(dev)} of 1"
+                        + (' (thermodynamically consistent).' if dev < 1e-6 else '.'))
         parts.append(('Key numbers', bullets(keys)))
         cols = [('quantity', 'quantity', 'P3.3', tex_escape), ('case', 'case', 'l', tex_escape), ('expr', r'$A\,\exp(-E_a/RT)$', 'l', lambda s: s),
-                ('units', 'units', 'l', lambda s: s), ('T_range', '$T$ (K)', 'l', tex_escape), ('conditions', 'conditions', 'P4.2', tex_escape),
+                ('units', 'units', 'P2.3', lambda s: s), ('T_range', '$T$ (K)', 'l', tex_escape), ('conditions', 'conditions', 'P4.0', tex_escape),
                 ('R2', '$R^2$', 'r', lambda v: tex_num(v, 4)), ('dEa_vs_reference_kJ_per_mol', r'$\Delta E_a$\\(kJ/mol)', 'r', tex_kj),
                 ('A_over_reference', r'$A/A_\mathrm{ref}$', 'r', None), ('curved', 'curved', 'l', tex_flag)]
-        parts.append(('Arrhenius expressions', rep.table(
-            pd.concat([intrinsic, rep.sort_cases(obs)]), cols,
-            r'Rates of hydrogen in Arrhenius form, $E_a$ in kJ/mol, $R = 8.314\times10^{-3}$ kJ/(mol K). Intrinsic rows: the '
-            r'\probe{} step alone; observed rows: the steady-state surface of each case.', 'arrhenius_fits.csv', group_by='case')))
+        intr_rows = fits[fits['level'] == 'intrinsic']
+        f2 = [is_format2(q) for q in fits['quantity']]
+        for fmt2, title, caption in (
+                (False, 'Arrhenius expressions', r'Rates of hydrogen in Arrhenius form, per site (Format 1). $E_a$ in kJ/mol, '
+                 r'$R = 8.314\times10^{-3}$ kJ/(mol K). Intrinsic rows: the \probe{} step alone; observed rows: the '
+                 r'steady-state surface of each case.'),
+                (True, 'Arrhenius expressions per area (Format 2)', r'The same rates per area, and the sticking probability. '
+                 r'Converting does not change $E_a$, only $A$.')):
+            sel = pd.Series(f2, index=fits.index) == fmt2
+            rows = pd.concat([intr_rows[sel[intr_rows.index]], rep.sort_cases(obs[sel[obs.index]])])
+            if len(rows):
+                parts.append((title, rep.table(rows, cols, caption, 'arrhenius_fits.csv', group_by='case')))
     elif keys:
         parts.append(('Key numbers', bullets(keys)))
+    if coeffs is not None and len(coeffs):
+        coeffs = coeffs.assign(kd=[tex_arrhenius(a, e) for a, e in zip(coeffs['kd_A_mol_m2_s_Pa'], coeffs['kd_Ea_kJ_per_mol'])],
+                               kr=[tex_arrhenius(a, e) for a, e in zip(coeffs['kr_A_m2_mol_s'], coeffs['kr_Ea_kJ_per_mol'])],
+                               T_range=[f'{a:g}--{b:g}' for a, b in zip(coeffs['T_min_K'], coeffs['T_max_K'])])
+        parts.append(('Surface coefficients in literature form', rep.table(
+            coeffs, [('system', 'system', 'P4.2', tex_formula), ('kd', r'adsorption coefficient $k_d$\\(mol m$^{-2}$ s$^{-1}$ Pa$^{-1}$)', 'l', lambda s: s),
+                     ('kr', r'surface recombination $k_r$\\(m$^2$ mol$^{-1}$ s$^{-1}$)', 'l', lambda s: s),
+                     ('T_range', '$T$ (K)', 'l', tex_escape), ('kd_R2', r'$R^2$\\($k_d$)', 'r', lambda v: tex_num(v, 4)),
+                     ('conditions', 'conditions', 'P3.6', tex_escape)],
+            r'Hydrogen surface coefficients in the form of literature tables, $A\,\exp(-E_a/RT)$ with $E_a$ in kJ/mol. '
+            r'Steady-state rows give the effective $k_d$ of that surface; $k_r$ is the surface step, the same in every case.',
+            'surface_coefficients.csv')))
     if intr is not None and len(intr):
         parts.append(('Intrinsic rate constants', rep.table(
             intr, [('T_K', '$T$ (K)', 'r', None), ('k_diss_clean_1_per_s', r'$k_\mathrm{diss}$ (s$^{-1}$)\\empty surface', 'r', None),
                    ('k_rec_full_1_per_s', r'$k_\mathrm{rec}$ (s$^{-1}$)\\full of \adsorbate{}', 'r', None),
                    ('K_eq', r'$K$\\(dimensionless)', 'r', None), ('dH_thermo_kJ_per_mol', r'$\Delta H^\circ$\\(kJ/mol)', 'r', tex_kj),
-                   ('dS_thermo_J_per_mol_K', r'$\Delta S^\circ$\\(J/(mol K))', 'r', None)],
-            r'Intrinsic constants of the \probe{} step at each temperature; $\Delta H^\circ$, $\Delta S^\circ$ from the mechanism thermochemistry.',
-            'arrhenius_intrinsic.csv')))
+                   ('dS_thermo_J_per_mol_K', r'$\Delta S^\circ$\\(J/(mol K))', 'r', None),
+                   ('check_K_thermo', r'check\\$K$', 'r', lambda v: tex_num(v, 6))],
+            r'Intrinsic constants of the \probe{} step at each temperature; $\Delta H^\circ$, $\Delta S^\circ$ from the mechanism '
+            r'thermochemistry, at $P^\circ$ = 1 bar.', 'arrhenius_intrinsic.csv')))
+        if 'kd_clean_mol_m2_s_Pa' in intr:
+            parts.append(('', rep.table(
+                intr, [('T_K', '$T$ (K)', 'r', None), ('kd_clean_mol_m2_s_Pa', r'$k_d$ (mol\\m$^{-2}$ s$^{-1}$ Pa$^{-1}$)', 'r', None),
+                       ('kr_surface_m2_mol_s', r'$k_r$\\(m$^2$ mol$^{-1}$ s$^{-1}$)', 'r', None),
+                       ('gamma_clean', r'$\gamma_\mathrm{clean}$', 'r', None), ('theta_H_eq', r'$\theta_\mathrm{H,eq}$', 'r', tex_coverage),
+                       ('C_H_eq_mol_m2', r'$C_\mathrm{H,eq}$\\(mol H m$^{-2}$)', 'r', None),
+                       ('J0_clean_mol_m2_s', r'$J_0$\\(mol m$^{-2}$ s$^{-1}$)', 'r', None)],
+                f'The same per area (Format 2), at $p$(\\probe) = {cfg.reference_pressure / 1e5:g} bar: equilibrium of a surface '
+                f'holding only hydrogen.', 'arrhenius_intrinsic.csv')))
     if loc is not None and len(loc):
         cases = [c for c in rep.case_order() if c in set(loc['case'])]
         parts.append(('Local activation energies', '\n\n'.join([
@@ -1093,8 +1191,67 @@ def section_arrhenius(rep):
                       r'$-R\,d\ln\mathrm{TOF}/d(1/T)$ by central differences.', '$T$ (K)', 'arrhenius_local.csv', fmt=tex_kj, col_order=cases),
             rep.pivot(loc, 'T_K', 'case', 'fwd_over_rev', r'Dissociation / recombination TOF: 1 = the \probe{} step at equilibrium.',
                       '$T$ (K)', 'arrhenius_local.csv', fmt=lambda v: tex_num(v, 4), col_order=cases)])))
-    parts.append(('figure', 'arrhenius', 'arrhenius'))
+    parts += [('figure', 'arrhenius', 'arrhenius'), ('figure', 'arrhenius_per_area', 'arrhenius_per_area'),
+              ('figure', 'surface_exchange_vs_T', 'surface_exchange_vs_T')]
     return rep.section('arrhenius', parts)
+
+
+def section_equilibrium(rep):
+    cov = rep.csv('equilibrium_coverage.csv')
+    half = rep.csv('half_coverage_temperature.csv')
+    chk = rep.csv('equilibrium_check.csv')
+    P_ref = rep.cfg.reference_pressure / 1e5
+    parts, keys = [], []
+    if half is not None and len(half):
+        r = half[np.isclose(half['p_bar'], P_ref)]
+        if len(r) and np.isfinite(r['T_half_K'].iloc[0]):
+            keys.append(f"A surface holding only hydrogen is half covered at {tex_num(r['T_half_K'].iloc[0])} K at "
+                        f"$p$(\\probe) = {P_ref:g} bar"
+                        + (f" (from {tex_num(half['T_half_K'].min())} K at {half['p_bar'].min():g} bar to "
+                           f"{tex_num(half['T_half_K'].max())} K at {half['p_bar'].max():g} bar)." if len(half) > 1 else '.'))
+    if cov is not None and len(cov):
+        keys.append(f"Equilibrium coverage over the grid: $\\theta_\\mathrm{{H,eq}}$ = {tex_num(cov['theta_H_eq'].min())} to "
+                    f"{tex_num(cov['theta_H_eq'].max())}; at most {tex_num(cov['C_H_eq_mol_m2'].max())} mol H m$^{{-2}}$.")
+        dev = (cov['check_K_rates'] - 1).abs().max()
+        keys.append(f"$K$ from the thermochemistry against $K$ from the rates: within {tex_num(dev)} of 1.")
+    if chk is not None and len(chk):
+        for source, g in chk.groupby('source', sort=False):
+            off = g[(g['q'] - 1).abs() > 0.01]
+            keys.append(f"{tex_escape(source).capitalize()} steady states: $q$ = {tex_num(g['q'].min(), 4)} to {tex_num(g['q'].max(), 4)}"
+                        + (f"; off equilibrium by more than 1\\,\\% in {len(off)} of {len(g)} "
+                           f"({tex_escape(', '.join(sorted(set(off['case']))))})." if len(off) else
+                           r' --- the \probe{} step is at equilibrium in all of them.'))
+    parts.append(('Key numbers', bullets(keys)))
+    if half is not None and len(half):
+        parts.append(('Half-coverage temperature', rep.table(
+            half, [('p_bar', r'$p$(\probe) (bar)', 'r', None), ('T_half_K', r'$T_{1/2}$ (K)', 'r', None), ('note', 'note', 'P7', tex_escape)],
+            r'Temperature at which a surface holding only hydrogen is half covered ($K\,p/P^\circ = 1$).',
+            'half_coverage_temperature.csv')))
+    if cov is not None and len(cov):
+        T_order = sorted(set(cov['T_K']))
+        for col, what, fmt in (('theta_H_eq', r'Equilibrium coverage $\theta_\mathrm{H,eq}$', tex_coverage),
+                               ('C_H_eq_mol_m2', r'Equilibrium hydrogen on the surface $C_\mathrm{H,eq}$ (mol H m$^{-2}$, Format 2)', None),
+                               ('J0_clean_mol_m2_s', r'Equilibrium exchange flux $J_0$ (mol m$^{-2}$ s$^{-1}$, Format 2)', None)):
+            parts.append(('Equilibrium coverage' if col == 'theta_H_eq' else '', rep.pivot(
+                cov, 'p_bar', 'T_K', col, what + ' of a surface holding only hydrogen, per pressure and temperature.',
+                r'$p$(\probe) (bar)', 'equilibrium_coverage.csv', fmt=fmt, col_order=T_order, col_head=lambda T: f'{T:g} K')))
+    if chk is not None and len(chk):
+        main = chk[chk['source'] == 'main']
+        cols = [('theta_H', r'$\theta_\mathrm{H}$', 'r', tex_coverage), ('theta_v', r'$\theta_v$', 'r', tex_coverage),
+                ('theta_H_over_theta_v', r'$\theta_\mathrm{H}/\theta_v$', 'r', None),
+                ('equilibrium_ratio', r'$(K\,p/P^\circ)^{1/n}$', 'r', None), ('q', '$q$', 'r', lambda v: tex_num(v, 5))]
+        parts.append(('Equilibrium check of the main steady states', rep.series_tables(
+            main[main['basis'] == 'fixed_probe'] if 'basis' in main else main, cols, 'Equilibrium check', 'equilibrium_check.csv')))
+        summ = (chk.groupby(['source', 'case'], sort=False)['q'].agg(['count', 'min', 'max']).reset_index())
+        parts.append(('', rep.table(summ,
+                                    [('source', 'steady states', 'l', tex_escape), ('case', 'case', 'l', tex_escape),
+                                     ('count', 'number', 'r', None), ('min', r'$q$ min', 'r', lambda v: tex_num(v, 5)),
+                                     ('max', r'$q$ max', 'r', lambda v: tex_num(v, 5))],
+                                    'Equilibrium check of every steady state of the run, by source and case.', 'equilibrium_check.csv',
+                                    group_by='source')))
+    parts += [('figure', 'equilibrium_coverage', 'equilibrium_coverage'),
+              ('figure', 'equilibrium_coverage_per_area', 'equilibrium_coverage_per_area')]
+    return rep.section('equilibrium', parts)
 
 
 def section_pressure_sweep(rep):
@@ -1103,7 +1260,8 @@ def section_pressure_sweep(rep):
     parts, keys, tables = [], [], []
     if ps is not None and len(ps):
         ps = ps.assign(two=ps['status'] == 'two states')
-        ps.loc[~ps['converged'].astype(bool), ['tof_fwd', 'poisoning_factor', 'slope_dlnTOF_dlnp']] = np.nan
+        ps.loc[~ps['converged'].astype(bool), [c for c in ('tof_fwd', 'poisoning_factor', 'slope_dlnTOF_dlnp', 'J_diss_mol_m2_s',
+                                                           'gamma_eff') if c in ps]] = np.nan
         temps = sorted(ps['T_K'].unique())
         Ps = sorted(ps['P_ref_bar'].unique())
         parts.append(('What was computed', f'{len(Ps)} probe-gas pressures from {tex_num(Ps[0])} to {tex_num(Ps[-1])} bar at '
@@ -1119,7 +1277,9 @@ def section_pressure_sweep(rep):
             tables.append(sweep_pivots(rep, d, 'P_ref_bar', '$p$(\\probe) (bar)', [
                 ('tof_fwd', f'Dissociation TOF (s$^{{-1}}$) at {T:g} K.', None),
                 ('poisoning_factor', f'Poisoning factor $\\Pi$ at {T:g} K.', None),
-                ('slope_dlnTOF_dlnp', f'Local slope $d\\ln\\mathrm{{TOF}}/d\\ln p$ at {T:g} K.', None)], 'pressure_sweep.csv'))
+                ('slope_dlnTOF_dlnp', f'Local slope $d\\ln\\mathrm{{TOF}}/d\\ln p$ at {T:g} K.', None),
+                ('J_diss_mol_m2_s', f'Dissociation flux $J_\\mathrm{{diss}}$ (mol m$^{{-2}}$ s$^{{-1}}$; Format 2) at {T:g} K.', None)],
+                'pressure_sweep.csv'))
     if half is not None and len(half):
         for rec in half.to_dict('records'):
             if pd.notna(rec.get('half_rate_P_bar')):
@@ -1133,7 +1293,8 @@ def section_pressure_sweep(rep):
                                              ('direction', 'direction', 'l', tex_escape), ('note', 'note', 'P6', tex_escape)],
             r'Probe-gas pressure where $\Pi$ crosses 0.5.', 'half_rate_pressure.csv')))
     parts.append(('Rates against pressure', '\n\n'.join(tables)))
-    parts.append(('figure', 'pressure_sweep', 'pressure_sweep'))
+    parts += [('figure', 'pressure_sweep', 'pressure_sweep'), ('figure', 'pressure_sweep_per_area', 'pressure_sweep_per_area'),
+              ('figure', 'surface_exchange_vs_P', 'surface_exchange_vs_P')]
     for stem in rep.stems(r'pressure_sweep_coverages_.+'):
         parts.append(('figure', 'pressure_sweep_coverages', stem, f'({stem.rsplit("_", 1)[-1].replace("K", " K")}.)'))
     return rep.section('pressure_sweep', parts)
@@ -1203,7 +1364,7 @@ def section_rate_control(rep):
         parts.append(('Rate control at every point', rep.series_tables(
             summ, [('trc1', r'top TRC species', 'l', lambda s: s), ('trc2', r'second', 'l', lambda s: s),
                    ('trc_sum', r'TRC\\sum', 'r', None), ('drc_probe', r'DRC of the\\probe step', 'r', None),
-                   ('drc1', r'largest other DRC step', 'P4.4', lambda s: s), ('drc2', 'second other DRC step', 'P4.4', lambda s: s)],
+                   ('drc1', r'largest other\\DRC step', 'P4.4', lambda s: s), ('drc2', r'second other\\DRC step', 'P4.4', lambda s: s)],
             r'Rate control of the dissociation rate (values in parentheses)', 'sensitivity.csv')))
     pts = []
     for stem in rep.stems(r'rate_control_[\d.]+K_[0-9.e+-]+bar(_DRC)?'):
@@ -1317,7 +1478,7 @@ def section_flux(rep):
 SECTION_BUILDERS = {
     'steady_state': section_steady_state, 'composition': section_composition, 'diagnostics': section_diagnostics,
     'convergence': section_convergence, 'curves': section_curves, 'sweep': section_sweep, 'arrhenius': section_arrhenius,
-    'pressure_sweep': section_pressure_sweep, 'orders': section_orders, 'rate_control': section_rate_control,
+    'pressure_sweep': section_pressure_sweep, 'equilibrium': section_equilibrium, 'orders': section_orders, 'rate_control': section_rate_control,
     'paths': section_paths, 'transients': section_transients, 'flux': section_flux,
 }
 

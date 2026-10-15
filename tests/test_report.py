@@ -45,6 +45,8 @@ def test_numbers():
     assert report.tex_arrhenius(1.0, 1e-3) == '$1$ (no $T$ dependence)'
     assert report.fig_refs(['fig:3', 'fig:4', 'fig:5', 'fig:8']) == r'Figures \ref{fig:3}--\ref{fig:5}, \ref{fig:8}'
     assert report.fig_refs(['fig:2']) == r'Figure \ref{fig:2}'
+    assert report.tex_units('mol H2 m-2 s-1 Pa-1') == r'mol H\textsubscript{2} m$^{-2}$ s$^{-1}$ Pa$^{-1}$'
+    assert report.tex_units('-') == '--' and report.tex_units('m2 mol-1 s-1') == r'm$^{2}$ mol$^{-1}$ s$^{-1}$'
 
 
 def test_table_borders_and_row_limit(toy_cfg):
@@ -64,11 +66,13 @@ def test_table_borders_and_row_limit(toy_cfg):
 def test_figure_parts_and_stems(toy_cfg):
     rep = report.Report(toy_cfg, log=lambda *a: None)
     os.makedirs(rep.out, exist_ok=True)
-    for name in ('a.pdf', 'a.png', 'b_1.pdf', 'b_2.pdf', 'b_1.png', 'b_2.png', 'c_650K_DRC_1.png', 'c_650K_DRC_2.png'):
+    for name in ('a.pdf', 'a.png', 'b_1.pdf', 'b_2.pdf', 'b_1.png', 'b_2.png', 'c_650K_DRC_1.png', 'c_650K_DRC_2.png',
+                 'a_per_area.pdf', 'b_per_area_1.pdf', 'b_per_area_2.pdf'):
         open(os.path.join(rep.out, name), 'w').close()
-    assert rep.figure_files('a') == ['a.pdf']                         # PDF preferred
+    assert rep.figure_files('a') == ['a.pdf']                         # PDF preferred; not the per-area copy
     assert rep.figure_files('b') == ['b_1.pdf', 'b_2.pdf']            # parts, in order
-    assert rep.stems(r'.+') == ['a', 'b', 'c_650K_DRC']                # parts merged into their figure
+    assert rep.figure_files('b_per_area') == ['b_per_area_1.pdf', 'b_per_area_2.pdf']
+    assert rep.stems(r'.+') == ['a', 'a_per_area', 'b', 'b_per_area', 'c_650K_DRC']   # parts merged into their figure
     tex, labels = rep.figure('b', 'Caption.')
     assert labels == ['fig:1', 'fig:2'] and 'part 2 of 2' in tex
 

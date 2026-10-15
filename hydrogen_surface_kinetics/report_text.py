@@ -466,3 +466,163 @@ other sections; one frame per reactor is shown, and the full video is in its fol
         ],
     },
 }
+
+
+# --- Format 2: per area (per_area.py; docs/rates_units_equilibrium.md) -----------------------
+CONVENTIONS = CONVENTIONS.replace(r"""\end{itemize}""", r"""\item \textbf{Two formats.} \emph{Format 1} gives rates per site (TOF, s$^{-1}$). \emph{Format 2}
+  gives the same results per area of surface, the units of the hydrogen-surface literature:
+  fluxes $J$ = TOF $\times\,\Gamma$ (mol \probe{} m$^{-2}$ s$^{-1}$), the effective adsorption
+  coefficient $k_{d,\mathrm{eff}} = J_\mathrm{diss}/p$ (mol \probe{} m$^{-2}$ s$^{-1}$ Pa$^{-1}$), the
+  surface recombination coefficient $k_r$ of $J_\mathrm{rec} = k_r(\theta_\mathrm{H}\Gamma)^2$
+  (m$^2$ mol$^{-1}$ s$^{-1}$), the sticking probability $\gamma_\mathrm{eff} = J_\mathrm{diss}/Z$
+  ($Z = p/\sqrt{2\pi MRT}$, the impingement flux) and the hydrogen on the surface
+  $C_\mathrm{H} = \theta_\mathrm{H}\Gamma$ (mol H m$^{-2}$). Figures in Format 2 have the suffix
+  \texttt{\_per\_area}; the site density $\Gamma$ they use is on their axis. Converting does not
+  change any activation energy, only prefactors. $\Gamma$ belongs to an ideal facet, so ``per
+  m$^2$'' is per atomic surface area: literature values per geometric area of a real, rough
+  sample can be higher by a roughness factor (typically 1--10). Fluxes count \probe{}
+  molecules, surface concentrations H atoms. Recombination is the surface step only; there is
+  no subsurface or bulk hydrogen in the mechanism.
+\end{itemize}""")
+
+_F2_COLUMNS = [
+    (r'$J_\mathrm{diss}$, $J_\mathrm{rec}$, $J_\mathrm{net}$', r'dissociation, recombination and net flux = TOF $\times\,\Gamma$ (mol \probe{} m$^{-2}$ s$^{-1}$)'),
+    (r'$J_\mathrm{ex}$', r'exchange flux $\min(J_\mathrm{diss}, J_\mathrm{rec})$: the part that cycles between gas and surface; $J_0$ at equilibrium'),
+    (r'$k_{d,\mathrm{eff}}$', r'effective adsorption coefficient $J_\mathrm{diss}/p$ (mol \probe{} m$^{-2}$ s$^{-1}$ Pa$^{-1}$) $= k_d\,\theta_v^2$'),
+    (r'$\gamma_\mathrm{eff}$', r'sticking probability per collision, $J_\mathrm{diss}/Z$ (0 to 1)'),
+    (r'$C_\mathrm{H}$', r'hydrogen on the surface, $\theta_\mathrm{H}\Gamma$ (mol H m$^{-2}$)'),
+]
+_SAME = ('(b), (c)', 'As in the per-site figure.', 'They have no units, so they are identical.', [])
+
+SECTIONS['steady_state']['columns'] += _F2_COLUMNS
+SECTIONS['steady_state']['figures'] += [
+    {'key': 'rates_summary_vs_T_per_area', 'caption': 'Main steady states along the temperature series, per area (Format 2).',
+     'panels': [
+         ('(a) adsorption coefficient',
+          r'The effective adsorption coefficient $k_{d,\mathrm{eff}} = J_\mathrm{diss}/p$ of each case, in the unit of literature adsorption coefficients; the axis gives the site density $\Gamma$ used.',
+          r'It is the per-site TOF times $\Gamma/p$: the same pattern in per-area units. On a clean surface it would be $k_d = \gamma/\sqrt{2\pi MRT}$; on the steady-state surface $k_{d,\mathrm{eff}} = k_d\,\theta_v^2$.',
+          [('a case below the reference', r'the impurity lowers the adsorption coefficient by taking empty sites ($\theta_v^2$)'),
+           ('a value compared with a literature $k_d$', 'ours is per atomic area of an ideal facet; literature values per geometric area of a rough sample can be higher by a roughness factor of 1--10')]),
+         _SAME]},
+    {'key': 'rates_summary_vs_P_per_area', 'caption': 'Main steady states along the pressure series, per area (Format 2).',
+     'panels': [
+         ('(a) adsorption coefficient', r'$k_{d,\mathrm{eff}} = J_\mathrm{diss}/p$ of each case at each probe-gas pressure.',
+          r'A coefficient: the pressure is divided out.',
+          [('$k_{d,\\mathrm{eff}}$ coming down as the pressure rises', r'the surface fills ($\theta_v$ falls); first-order adsorption with a constant $k_d$, as the literature assumes, would give a flat line'),
+           ('$k_{d,\\mathrm{eff}}$ flat with pressure', r'few adsorbates: $J = k_d\,p$ holds')]),
+         _SAME]},
+]
+
+SECTIONS['sweep']['figures'] += [
+    {'key': 'temperature_sweep_per_area', 'caption': 'Temperature sweep at the reference pressure, per area (Format 2).',
+     'panels': [
+         ('(a) Arrhenius plot per area', r'$k_{d,\mathrm{eff}}$ (log) against $1000/T$, one line per case.',
+          r'The same slope as the per-site Arrhenius plot: converting does not change $E_\mathrm{app}$.',
+          [('a straight line', 'one activation energy, the same as per site'),
+           ('lines steeper than the clean-surface $k_d$ (Arrhenius section)', 'the step waits for free sites; the observed barrier includes freeing them')]),
+         _SAME]},
+]
+
+SECTIONS['arrhenius']['columns'] += _F2_COLUMNS + [
+    (r'$k_d$, $k_r$ (literature-style table)', r'the clean-surface adsorption coefficient (mol \probe{} m$^{-2}$ s$^{-1}$ Pa$^{-1}$; for a steady state: $k_{d,\mathrm{eff}}$) and the surface recombination coefficient (m$^2$ mol$^{-1}$ s$^{-1}$), each as $A\,\exp(-E_a/RT)$; $k_r$ is a property of the surface step, the same in every case'),
+    (r'$\gamma_\mathrm{clean}$, $\theta_\mathrm{H,eq}$, $C_\mathrm{H,eq}$, $J_0$', r'on a surface holding only hydrogen at the reference pressure: the sticking probability (the mechanism\textquotesingle s sticking coefficient), the equilibrium coverage and amount of H, and the equilibrium exchange flux'),
+    ('check $K$', r'$K$ from the rates divided by $K$ from the thermochemistry: 1 for a thermodynamically consistent mechanism'),
+]
+SECTIONS['arrhenius']['figures'] += [
+    {'key': 'arrhenius_per_area', 'caption': 'Hydrogen rates in Arrhenius form, per area (Format 2).',
+     'panels': [
+         ('(a) adsorption coefficient, clean surface', r'$k_d$ (mol \probe{} m$^{-2}$ s$^{-1}$ Pa$^{-1}$) against $1000/T$ with its fit.',
+          r'$k_d = \gamma/\sqrt{2\pi MRT}$: the sticking coefficient times a kinetic-theory factor.',
+          [('nearly flat', r'no barrier to dissociation; a constant $\gamma$ gives $E_a \approx -RT/2$ (from $1/\sqrt{T}$)'),
+           ('rising to the left (higher at high T)', 'activated sticking: the barrier in the sticking coefficient')]),
+         ('(b) surface recombination coefficient', r'$k_r$ (m$^2$ mol$^{-1}$ s$^{-1}$) of $J_\mathrm{rec} = k_r(\theta_\mathrm{H}\Gamma)^2$ against $1000/T$.',
+          r'A property of the surface step: the same in every case.',
+          [('falling steeply to the right', 'recombination is activated; its $E_a$ is close to the H$_2$ desorption energy'),
+           ('$E_a$(recombination) $-$ $E_a$(dissociation)', r'equals $-\Delta H^\circ$ of adsorption (thermodynamic consistency)')]),
+         ('(c) effective adsorption coefficient', r'$k_{d,\mathrm{eff}}$ of each case on its steady-state surface, with fits.',
+          r'These rows are the literature-style table: a per-area $k_d$ for each gas.',
+          [('a case far below the clean-surface $k_d$', r'its surface has few empty sites ($k_{d,\mathrm{eff}} = k_d\,\theta_v^2$)'),
+           ('an impurity case steeper than the reference', 'the impurity blocks sites at low T and leaves at high T')]),
+         ('(d) activation energies', 'As in the per-site figure.', 'Converting does not change $E_a$.', [])]},
+    {'key': 'surface_exchange_vs_T', 'caption': 'Sticking probability, exchange flux and hydrogen on the surface against temperature (temperature sweep).',
+     'panels': [
+         ('(a) sticking probability', r'$\gamma_\mathrm{eff} = J_\mathrm{diss}/Z$: the fraction of \probe{} molecules hitting the surface that dissociate. Dashed: the mechanism\textquotesingle s sticking coefficient (a clean surface).',
+          'Log scale, between 0 and 1.',
+          [('a case below the dashed line', r'fewer empty sites: $\gamma_\mathrm{eff} = \gamma\,\theta_v^2$'),
+           ('going up with T', 'the surface empties as adsorbates desorb'),
+           ('an impurity case below the reference', r'the impurity takes the sites \probe{} needs; the gap is the impurity effect as a probability')]),
+         ('(b) exchange flux', r'$J_\mathrm{ex}$ against $1000/T$. Dashed: $J_0$ of a surface holding only hydrogen at equilibrium.',
+          r'The rate at which hydrogen cycles between gas and surface, what isotope exchange (\probe{} + D$_2$) measures.',
+          [('the probe-only line on the dashed line', 'that surface is at the equilibrium coverage'),
+           ('an impurity case below the reference', 'fewer H atoms and empty sites to exchange: isotope exchange would be slower'),
+           ('a steep line', 'activated exchange')]),
+         ('(c) hydrogen on the surface', r'$C_\mathrm{H} = \theta_\mathrm{H}\Gamma$ (mol H m$^{-2}$). Dashed: $C_\mathrm{H,eq}$ of a surface holding only hydrogen.',
+          'Linear scale.',
+          [('coming down with T', 'hydrogen desorbs (adsorption is exothermic)'),
+           ('an impurity case below the reference', 'the impurity displaces hydrogen from the surface')]),
+     ]},
+]
+
+SECTIONS['pressure_sweep']['columns'] += _F2_COLUMNS
+SECTIONS['pressure_sweep']['figures'] += [
+    {'key': 'pressure_sweep_per_area', 'caption': 'Pressure sweep at fixed purity, per area (Format 2), one row per temperature.',
+     'panels': [
+         ('(a) dissociation flux', r'$J_\mathrm{diss}$ (mol \probe{} m$^{-2}$ s$^{-1}$) against $p$, log--log.',
+          'A flux, so the slope is the reaction order, as per site.',
+          [('slope 1', r'first order: $J = k_d\,p$, as the literature assumes'),
+           ('the line flattening', r'the surface saturates with \adsorbate{}; $J = k_d\,p$ no longer holds')]),
+         _SAME]},
+    {'key': 'surface_exchange_vs_P', 'caption': 'Sticking probability, exchange flux and hydrogen on the surface against pressure, one row per temperature.',
+     'panels': [
+         ('(a) sticking probability', r'$\gamma_\mathrm{eff}$ against $p$; dashed: the clean-surface sticking coefficient.', 'Log--log.',
+          [('coming down with pressure', r'the surface fills, so fewer collisions find two empty sites')]),
+         ('(b) exchange flux', r'$J_\mathrm{ex}$ against $p$; dashed: $J_0$ at the equilibrium coverage.', 'Log--log.',
+          [('rising more slowly than $p$', 'saturation: more pressure, but no more empty sites')]),
+         ('(c) hydrogen on the surface', r'$C_\mathrm{H}$ against $p$; dashed: $C_\mathrm{H,eq}$.', 'Log--log.',
+          [('rising as $\\sqrt{p}$ at low pressure', 'dissociative adsorption: one \\probe{} gives two H'),
+           (r'levelling off near $\Gamma$', 'the surface is full of hydrogen')]),
+     ]},
+]
+
+SECTIONS['equilibrium'] = {
+    'title': 'Equilibrium coverage of hydrogen',
+    'goal': r"""How much hydrogen sits on the clean metal at equilibrium with the gas, at each
+temperature and pressure, and is the \probe{} step at equilibrium in every steady state? The
+equilibrium constant $K$ of the step alone, from the mechanism\textquotesingle s
+thermochemistry, fixes $\theta_\mathrm{H}/\theta_v = (K\,p/P^\circ)^{1/n}$. On a surface holding
+only hydrogen this is the dissociative Langmuir isotherm. In any steady state the same ratio
+holds whenever the step is at equilibrium, whatever else covers the surface: an impurity lowers
+$\theta_\mathrm{H}$ and $\theta_v$ together but cannot change their ratio.""",
+    'columns': [
+        ('$K$', r'dimensionless equilibrium constant $\theta_\mathrm{H}^2/(\theta_v^2\,p/P^\circ)$, $P^\circ$ = 1 bar, from the thermochemistry'),
+        ('check $K$', r'$K$ from the rates divided by $K$ from the thermochemistry (1 = consistent)'),
+        (r'$\theta_\mathrm{H,eq}$, $\theta_{v,\mathrm{eq}}$, $C_\mathrm{H,eq}$', r'equilibrium coverage and amount of hydrogen (mol H m$^{-2}$) of a surface holding only hydrogen'),
+        ('$J_0$', r'the exchange flux at that equilibrium (mol \probe{} m$^{-2}$ s$^{-1}$)'),
+        ('$T_{1/2}$', r'the temperature at which that surface is half covered at the given pressure ($K\,p/P^\circ = 1$)'),
+        ('$q$', r'$(\theta_\mathrm{H}/\theta_v)/(K\,p/P^\circ)^{1/n}$ of a steady state: 1 = the \probe{} step is at equilibrium there'),
+    ],
+    'figures': [
+        {'key': 'equilibrium_coverage', 'caption': 'Equilibrium coverage of a surface holding only hydrogen, and the equilibrium check of the steady states.',
+         'panels': [
+             ('(a) isotherms', r'$\theta_\mathrm{H,eq}$ against $p$, a line per temperature; open circles: the steady states of the probe gas alone.',
+              'Log pressure axis.',
+              [('rising with $p$, as $\\sqrt{p}$ at low pressure', 'dissociative adsorption'),
+               ('levelling off near 1', 'the surface is saturated with hydrogen'),
+               ('the circles on the lines', 'the probe-gas-only steady states are at the equilibrium coverage')]),
+             ('(b) against temperature', r'$\theta_\mathrm{H,eq}$ against $T$, a line per pressure; diamonds: $T_{1/2}$; circles: steady states.',
+              r'S-shaped: covered at low $T$, empty at high $T$.',
+              [('coming down with T', r'adsorption is exothermic ($\Delta H^\circ < 0$): hydrogen leaves as T rises'),
+               ('a higher pressure shifting the curve to the right', r'more pressure keeps hydrogen on to a higher temperature ($T_{1/2}$ rises)')]),
+             ('(c) equilibrium check', r'$q$ for each case at each main point; the dashed line is 1.', 'Linear scale around 1.',
+              [('$q = 1$', r'the \probe{} step is at equilibrium in that steady state; an impurity acts only through $\theta_v$'),
+               ('$q$ below 1', 'fewer H atoms than equilibrium: other reactions consume H faster than dissociation replaces it, so the step is not equilibrated and limits the rate'),
+               ('$q$ above 1', r'more H than equilibrium: other reactions produce H (e.g.\ an impurity decomposing), which leaves as \probe{}')]),
+         ]},
+        {'key': 'equilibrium_coverage_per_area', 'caption': 'Equilibrium coverage per area (Format 2).',
+         'panels': [
+             ('(a), (b)', r'As in the per-site figure, as $C_\mathrm{H,eq}$ (mol H m$^{-2}$); the axis gives $\Gamma$.',
+              r'The maximum, $\Gamma$, is a full surface.', [('a value', 'the hydrogen held on each m$^2$ of the metal at equilibrium')]),
+             ('(c)', 'As in the per-site figure.', 'Identical: $q$ has no units.', []),
+         ]},
+    ],
+}

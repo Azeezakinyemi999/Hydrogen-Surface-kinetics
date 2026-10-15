@@ -1,13 +1,15 @@
 """Main steady states: rates, coverages and poisoning factors (documentation: Stages 6-9).
 
 Outputs: steady_state_results.csv; rates_summary_vs_T.png and, with a pressure series,
-rates_summary_vs_P.png (basis_comparison.csv with include_input_basis = True).
+rates_summary_vs_P.png, each also per area (Format 2: rates_summary_vs_T_per_area.png, ...);
+basis_comparison.csv with include_input_basis = True.
 """
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
 from .. import conditions as C
+from .. import per_area as PA
 from .. import plotting as P
 from .. import solver as S
 from ..labels import probe_label
@@ -49,6 +51,8 @@ def run(ctx):
 
     for series in C.SERIES:
         P.save_parts(plot_rates(ctx, summary, series), ctx.path(common.series_file('rates_summary', series)), cfg)
+        P.save_parts(plot_rates(ctx, summary, series, per_area=True),
+                     ctx.path(common.series_file('rates_summary', series, suffix='_per_area')), cfg)
     ok = summary[(summary['basis'] == 'fixed_probe') & summary['converged']].copy()
     ok['point'] = [common.point_name(r) for r in ok.to_dict('records')]
     slow = ok.pivot_table(index='case', columns='point', values='slowdown_x', observed=True, sort=False)
@@ -56,11 +60,12 @@ def run(ctx):
     return ctx.outputs['steady_state']
 
 
-def plot_rates(ctx, summary, series='temperature', basis='fixed_probe'):
+def plot_rates(ctx, summary, series='temperature', basis='fixed_probe', per_area=False):
     """Forward TOF, slowdown and empty sites per case. One row of panels per group of the
     series (temperature series: one row, a marker per T; pressure series: a row per
-    pressure-series temperature, a marker per P), at most three rows per figure. Returns the
-    figures."""
+    pressure-series temperature, a marker per P), at most three rows per figure. per_area:
+    panel (a) is the effective adsorption coefficient kd_eff = J_diss / p (Format 2) instead
+    of the TOF. Returns the figures."""
     cfg, model = ctx.cfg, ctx.model
     probe = probe_label(model)
     df = summary[(summary['basis'] == basis) & summary['converged']].copy()
@@ -74,7 +79,10 @@ def plot_rates(ctx, summary, series='temperature', basis='fixed_probe'):
 
     cases = [c for c in C.case_labels(cfg) if c in set(df['case'])]
     x_of = {c: i for i, c in enumerate(cases)}
-    panels = [('tof_fwd', f'{probe} dissociation rate (forward)', 'TOF  (events per site per s)', True),
+    first = (('kd_eff_mol_m2_s_Pa', f'{probe} adsorption coefficient',
+              PA.axis_label('$k_{d,\\mathrm{eff}}$', f'mol {P.sub(probe)} m$^{{-2}}$ s$^{{-1}}$ Pa$^{{-1}}$', model), True)
+             if per_area else ('tof_fwd', f'{probe} dissociation rate (forward)', 'TOF  (events per site per s)', True))
+    panels = [first,
               ('slowdown_x', f'Slowdown vs. {cfg.reference_label}', f'times slower than {cfg.reference_label}', True),
               ('theta_free', 'Empty sites', 'fraction of sites empty', False)]
     figs = []
@@ -116,7 +124,8 @@ def plot_rates(ctx, summary, series='temperature', basis='fixed_probe'):
             labels.append('panel b, open: if the site count were fixed')
             fig.legend(handles, labels, loc='upper center', bbox_to_anchor=(0.5, 1.02), ncol=len(labels),
                        frameon=False, fontsize=9)
-        fig.suptitle(f'Main steady states: {series} series', x=0.01, ha='left', fontsize=11)
+        fig.suptitle(f'Main steady states{" per area" if per_area else ""}: {series} series', x=0.01, ha='left',
+                     fontsize=11)
         fig.tight_layout(rect=(0, 0, 1, 0.93 if len(page) == 1 else 0.97))
         figs.append(fig)
     return figs

@@ -80,6 +80,8 @@ Part IV is for day-to-day use: running an analysis, writing the input file for a
 
 Units are SI with kilomoles, as Cantera uses internally: gas concentrations in kmol m⁻³, surface concentrations in kmol m⁻², rates of progress in kmol m⁻² s⁻¹, unless stated otherwise. [Appendix A](#a-notation) lists every symbol.
 
+Rates are reported **per site** (TOF, s⁻¹; Format 1) and also **per area** in the units of the hydrogen-surface literature (Format 2: fluxes in mol m⁻² s⁻¹, an adsorption coefficient in mol m⁻² s⁻¹ Pa⁻¹, a sticking probability, hydrogen on the surface in mol m⁻²; [Stage 7](#stage-7-rates-and-poisoning-metrics)). [`rates_units_equilibrium.md`](rates_units_equilibrium.md) explains both formats, how they relate to literature tables, and the equilibrium coverage of the surface.
+
 Two kinds of boxes appear throughout:
 
 > [!IMPORTANT]
@@ -163,7 +165,7 @@ flowchart TD
 | 8 | Surface composition | results | coverage tables, bar chart | `analyses/composition.py` |
 | 9 | Rate plots | summary table | `rates_summary_vs_T.png`, `_vs_P.png` | `analyses/steady_state.py` |
 | 10 | Mechanism diagnostics | mechanism, results | binding check, what-if runs, traces | `analyses/diagnostics.py` |
-| 11 | Further analyses | the Stage 4–6 solver, results | poisoning curves, temperature and pressure sweeps, Arrhenius forms, orders, rate control, path diagrams, transients | `analyses/curves.py` … `analyses/transients.py` |
+| 11 | Further analyses | the Stage 4–6 solver, results | poisoning curves, temperature and pressure sweeps, Arrhenius forms, equilibrium coverage, orders, rate control, path diagrams, transients; every rate also per area | `analyses/curves.py` … `analyses/transients.py` |
 | – | The run report | the output folder, `settings.py` | `output/report/<run>_report.pdf` | `report.py`, `report_text.py` ([The run report](#the-run-report)) |
 
 Paths are inside the package folder `hydrogen_surface_kinetics/`; the [Code map](#code-map) lists every file. Each analysis is chosen by its name in `analyses = [...]` of the run's `settings.py` ([Running an analysis](#running-an-analysis)). The RMG input of a run is also called `input.py`; in this document `input.py` always means RMG's file, and `settings.py` the package's.
@@ -734,7 +736,7 @@ flowchart TD
 
 **At a glance.**
 - Input: the results of Stage 6.
-- Output: the summary table (`ctx.outputs['steady_state']['summary']`), saved as `steady_state_results.csv`.
+- Output: the summary table (`ctx.outputs['steady_state']['summary']`), saved as `steady_state_results.csv`, with every rate per site and per area.
 - Code: `analyses/common.py`: `load_state`, `evaluate`, `results_frame`, `add_poisoning`; `analyses/steady_state.py`: `build_summary`, `run`.
 
 **Procedure.**
@@ -770,6 +772,18 @@ The code computes the first two factors as `blocking_from_theta`, and `blocking_
 - For an elementary step, impurities change the forward rate *only* through empty sites (and $f$). The substantive question is therefore which species take the sites, answered in Stage 8. A `blocking_check` different from 1 would point to coverage-dependent parameters, an indexing error, or a probe reaction that is not elementary.
 - **Forward, net and gas consumption** ([Section 2.5](#25-rates-per-site)). If `tof_probe_consumed` (net probe-gas consumption) is much larger than `tof_net` (net probe TOF), other reactions consume the probe gas, for example through a molecular adsorbate. Follow up with Stage 10.
 
+**Per area (Format 2).** `results_frame` also converts every rate to the units of the hydrogen-surface literature (`per_area.add_columns`; derivations in [`rates_units_equilibrium.md`](rates_units_equilibrium.md)). With $\Gamma$ in mol m⁻², $p$ the probe-gas partial pressure, $M$ its molar mass and $Z = p/\sqrt{2\pi MRT}$ its impingement flux:
+
+| Column | Definition | Unit |
+|---|---|---|
+| `J_diss_mol_m2_s`, `J_rec_mol_m2_s`, `J_net_mol_m2_s` | TOF × $\Gamma$ | mol A₂ m⁻² s⁻¹ |
+| `J_exchange_mol_m2_s` | $\min(J_\mathrm{diss}, J_\mathrm{rec})$: the part that cycles between gas and surface ($J_0$ at equilibrium) | mol A₂ m⁻² s⁻¹ |
+| `kd_eff_mol_m2_s_Pa` | $J_\mathrm{diss}/p = k_d\,\theta_\ast^{\,n}$: the effective adsorption coefficient | mol A₂ m⁻² s⁻¹ Pa⁻¹ |
+| `gamma_eff` | $J_\mathrm{diss}/Z$: the sticking probability per collision, $\gamma\,\theta_\ast^{\,n}$ | – |
+| `C_H_mol_m2` | $\theta_{A\ast}\,\Gamma$: the probe adsorbate on the surface | mol A m⁻² |
+
+Nothing is solved for these, and converting does not change any activation energy. $\Gamma$ is the site density of the mechanism's facet, so "per m²" is per atomic surface area; literature values per geometric area of a real, rough sample can be higher by a roughness factor (typically 1–10). Fluxes count probe-gas molecules, surface concentrations atoms. Recombination is the surface step, $J_\mathrm{rec} = k_r\,(\theta_{A\ast}\Gamma)^n$; the mechanism has no subsurface or bulk hydrogen.
+
 **Checks and failure modes.** The "need attention" list; any condition missing from the reference makes its poisoning factor undefined.
 
 ## Stage 8: Surface composition
@@ -796,12 +810,14 @@ The code computes the first two factors as `blocking_from_theta`, and `blocking_
 
 **At a glance.**
 - Input: the summary table.
-- Outputs: `rates_summary_vs_T.png`, `rates_summary_vs_P.png` (with a pressure series), plus printed tables.
+- Outputs: `rates_summary_vs_T.png`, `rates_summary_vs_P.png` (with a pressure series), each also per area (`…_per_area.png`), plus printed tables.
 - Code: `analyses/steady_state.py`: `plot_rates`; `plotting.py`: `style_axis`, `save`. With both bases, `basis_comparison.csv`.
 
 **Procedure.** Three panels share the case axis: (a) the forward probe TOF (log scale), (b) the slowdown relative to the probe-gas-only case (log scale, with a "no effect" line at 1), and (c) the fraction of empty sites $\theta_\ast$ (linear). In the temperature-series figure each temperature has its own marker shape and color, offset side by side; in the pressure-series figure each pressure does, with one row of panels per pressure-series temperature. In panel (b), open markers show the slowdown if the site count were fixed:
 
 $$\text{slowdown}_{\text{fixed sites}} = \text{slowdown}\times\left(\frac{f}{f_{\mathrm{ref}}}\right)^{n}.$$
+
+The `…_per_area` copies (Format 2) show in panel (a) the effective adsorption coefficient $k_{d,\mathrm{eff}} = J_\mathrm{diss}/p$ instead of the TOF, with $\Gamma$ on the axis; panels (b) and (c) have no units and are the same.
 
 If both bases were computed, `basis_comparison.csv` gives the ratio $\mathrm{TOF}(\texttt{input\_X})/\mathrm{TOF}(\texttt{fixed\_probe})$ for every case and temperature.
 
@@ -891,6 +907,7 @@ Report the results with their caveats listed; or run what-if sensitivity tests t
 | 11.2 Temperature sweep | `sweep` | (2 + impurities) × T: reference, each impurity, the mixture | `run_conditions` |
 | 11.2a Arrhenius form | `arrhenius` | none | the temperature sweep's results; fresh surface objects for the intrinsic constants |
 | 11.2b Pressure sweep | `pressure_sweep` | (2 + impurities) × p × T | `run_conditions` |
+| 11.2c Equilibrium coverage | `equilibrium` | none | the run's steady states; the mechanism thermochemistry |
 | 11.3 Reaction orders | `orders` | 3 per probe-gas-only case, 5 per impurity case, per T | `run_conditions` |
 | 11.4 Degree of rate control | `rate_control` | 2 per screened reaction and per screened species, per case | `run_jobs` (one start, cache) |
 | 11.5 Reaction path diagrams | `paths` | none | main results, `common.load_state` |
@@ -936,6 +953,8 @@ $$E_{\mathrm{app}}(T) = -R\,\frac{\partial\ln\mathrm{TOF}}{\partial(1/T)} ;$$
 
 **What covers the surface against temperature** (`sweep_coverages.png`): one panel per case, one stacked bar per solved temperature, with the species colors of Stage 8. Bars rather than areas, because every temperature is a separate solve: an isolated converged point still shows, and a temperature without a steady state is a visible gap. This is the figure that explains the rate curves, for example which adsorbate holds the sites up to which temperature.
 
+**Per area** (`temperature_sweep_per_area.png`): panel (a) as $k_{d,\mathrm{eff}}$ against $1000/T$. The slope, and so $E_\mathrm{app}$, is the same; only the prefactor and units change.
+
 ### 11.2a Hydrogen rates in Arrhenius form
 
 **What it does.** Writes the rates of the probe step as $k = A\,\exp(-E_a/RT)$, at two levels, without solving anything.
@@ -952,7 +971,25 @@ Every fit reports $A$, $E_a$, $R^2$, the number of points, the temperature range
 
 **Interpretation.** The observed $E_a$ of dissociation is higher than the intrinsic one when the step has to wait for free sites: it includes the cost of desorbing A∗ or the impurity. For an impurity that holds most sites, $\Delta E_a$ approaches $n$ times the magnitude of its adsorption enthalpy (11.2). Compare metals with the intrinsic constants, and impurities with $\Delta E_a$ and $A/A_{\mathrm{ref}}$ under the same conditions.
 
-**Outputs.** `arrhenius_intrinsic.csv`, `arrhenius_fits.csv`, `arrhenius_local.csv`, and `arrhenius.png`: (a) intrinsic $k_{\mathrm{diss}}$ and $k_{\mathrm{rec}}$ against $1000/T$, (b) the van 't Hoff plot of $K$, (c) the observed dissociation TOF per case with its fit, (d) $E_a$ of dissociation and recombination per case against the intrinsic dissociation $E_a$. Code: `analyses/arrhenius.py`; `tests/test_units.py` checks that a fit recovers known $A$ and $E_a$, and that $k_{\mathrm{diss}}/k_{\mathrm{rec}} = K_c\,p/RT$.
+**Per area (Format 2).** The same constants in the units of literature tables ([Stage 7](#stage-7-rates-and-poisoning-metrics)):
+- intrinsic: the clean-surface **adsorption coefficient** $k_d = J_\mathrm{diss}/p$ on an empty surface, which is $\gamma/\sqrt{2\pi MRT}$ (mol A₂ m⁻² s⁻¹ Pa⁻¹); the **surface recombination coefficient** $k_r$ of $J_\mathrm{rec} = k_r(\theta_{A\ast}\Gamma)^2$ (m² mol⁻¹ s⁻¹), the same in every case; the clean-surface sticking probability, which is the mechanism's sticking coefficient; and the equilibrium exchange flux $J_0$ (11.2c);
+- observed, per case: $k_{d,\mathrm{eff}}$, the exchange flux $J_\mathrm{ex}$ and the sticking probability $\gamma_\mathrm{eff}$.
+
+Converting does not change $E_a$: $\Gamma/p$ is constant at fixed pressure, so only $A$ changes (Figure 7). `surface_coefficients.csv` lists $k_d$ and $k_r$ as $A\,e^{-E_a/RT}$ in the form of literature tables: one row for the clean metal (intrinsic $k_d$) and one per case for its steady-state surface (effective $k_d$). An impurity row is the coefficient of the surface that impurity leaves, the counterpart of the "oxidized" rows of such tables.
+
+![Rates per site and per area](figures/fig_per_area.png)
+
+*Figure 7. Toy model. (a) Temperature sweep per site and (b) the same per area: identical slopes and activation energies, different prefactors and units. (c) Against pressure at 500 K, $k_{d,\mathrm{eff}} = k_d\,\theta_\ast^2$ falls as the surface fills; a first-order surface, as the literature's $J = k_d\,p$ assumes, would follow the dashed clean-surface $k_d$.*
+
+**Sticking and exchange** (`surface_exchange_vs_T.png`; `surface_exchange_vs_P.png` from 11.2b), per case: the **sticking probability** $\gamma_\mathrm{eff} = J_\mathrm{diss}/Z$, the fraction of impinging probe-gas molecules that dissociate ($\gamma\,\theta_\ast^2$ for a two-site step); the **exchange flux** $J_\mathrm{ex}$, the hydrogen cycling between gas and surface, which isotope exchange (H₂ + D₂ → 2 HD) measures; and the **hydrogen on the surface** $C_\mathrm{H}$. Dashed lines give the clean surface: its sticking coefficient, and $J_0$ and $C_\mathrm{H,eq}$ at the equilibrium coverage (11.2c).
+
+![Sticking probability, exchange flux and hydrogen on the surface](figures/fig_sticking_exchange.png)
+
+*Figure 8. Toy model at 1 bar. (a) The sticking probability stays below the mechanism's sticking coefficient (dashed) by the factor $\theta_\ast^2$; the impurity lowers it further at low temperature. (b) The exchange flux of the probe gas alone lies on the clean-surface $J_0$: that surface is at its equilibrium coverage. (c) The impurity displaces hydrogen at low temperature and leaves as $T$ rises.*
+
+**Standard pressure.** $K$ uses $P^\circ$ = 1 bar; RMG writes thermochemistry at 1 atm. `dS_thermo_J_per_mol_K` is converted to 1 bar ($\Delta S^\circ$ changes by $R\ln 1.01325$ = 0.11 J mol⁻¹ K⁻¹ per gas molecule consumed; $\Delta H^\circ$ does not change), and `check_K_thermo` = $K$ from the rates / $K$ from the thermochemistry is 1 for a thermodynamically consistent mechanism.
+
+**Outputs.** `arrhenius_intrinsic.csv`, `arrhenius_fits.csv` (with the units of each fit), `arrhenius_local.csv`, `surface_coefficients.csv`, `arrhenius_per_area.png` ((a) $k_d$, (b) $k_r$, (c) $k_{d,\mathrm{eff}}$ per case, (d) as below), `surface_exchange_vs_T.png`, and `arrhenius.png`: (a) intrinsic $k_{\mathrm{diss}}$ and $k_{\mathrm{rec}}$ against $1000/T$, (b) the van 't Hoff plot of $K$, (c) the observed dissociation TOF per case with its fit, (d) $E_a$ of dissociation and recombination per case against the intrinsic dissociation $E_a$. Code: `analyses/arrhenius.py`, `per_area.py`; `tests/test_units.py` checks that a fit recovers known $A$ and $E_a$, that $k_{\mathrm{diss}}/k_{\mathrm{rec}} = K_c\,p/RT$, that the clean-surface sticking probability equals the toy's sticking coefficient, and that $K$ agrees with the thermochemistry.
 
 ### 11.2b Pressure sweep
 
@@ -960,9 +997,35 @@ Every fit reports $A$, $E_a$, $R^2$, the number of points, the temperature range
 - the forward probe TOF against $p_{A_2}$ (log–log);
 - the **local slope** $\partial\ln\mathrm{TOF}/\partial\ln p$ by central differences. For the reference case this is the order in the probe gas over the whole range, not just at one point (11.3). For impurity cases every partial pressure moves together, so it is the order in the total pressure at fixed purity;
 - the poisoning factor against pressure, and the **half-rate pressure**: the first pressure, going up, at which $\Pi$ crosses 0.5, with the direction (`recovers above half` or `falls below half`) in `half_rate_pressure.csv`;
-- what covers the surface against pressure (`pressure_sweep_coverages_<T>K.png`).
+- what covers the surface against pressure (`pressure_sweep_coverages_<T>K.png`);
+- per area: `pressure_sweep_per_area.png`, with panel (a) as the flux $J_\mathrm{diss}$ (mol m⁻² s⁻¹), whose slope is the same reaction order, and `surface_exchange_vs_P.png` (sticking probability, exchange flux and hydrogen on the surface against $p$; 11.2a).
 
 **Interpretation for a two-site probe step.** With the probe adsorbate filling the surface, $\theta_\ast \propto p_{A_2}^{-1/2}$ and the slope falls towards 0 as $p$ rises; with a strongly bound impurity at fixed purity, $\theta_\ast \propto 1/p_I \propto 1/p$, and the slope tends to $-1$. Code: `analyses/pressure_sweep.py`.
+
+### 11.2c Equilibrium coverage
+
+**What it does.** Without solving anything, from the equilibrium constant of the probe step alone:
+
+$$K = \frac{\theta_{A\ast}^{\,n}}{\theta_\ast^{\,n}\,p/P^\circ} = e^{-\Delta G^\circ/RT}\,\frac{P^\circ}{P_\mathrm{thermo}}, \qquad \frac{\theta_{A\ast}}{\theta_\ast} = \left(\frac{K\,p}{P^\circ}\right)^{1/n},$$
+
+with $\Delta G^\circ$ from the mechanism's thermochemistry (at its reference pressure $P_\mathrm{thermo}$, converted to $P^\circ$ = 1 bar). For a surface holding only the probe adsorbate, with $x = (K p/P^\circ)^{1/n}$:
+- the **equilibrium coverage** $\theta_{A,\mathrm{eq}} = x/(1+x)$, $\theta_{\ast,\mathrm{eq}} = 1/(1+x)$, and $C_\mathrm{H,eq} = \theta_{A,\mathrm{eq}}\Gamma$ (mol m⁻²), on a grid of temperatures (default: the temperature series and `pressure_temperatures`) and pressures (default: a log grid spanning the pressure series, `per_decade` = 4);
+- the **exchange flux** at that equilibrium, $J_0 = k_d\,p\,\theta_{\ast,\mathrm{eq}}^{\,n}$;
+- the **half-coverage temperature** $T_{1/2}$ at each pressure, where $K p/P^\circ = 1$ (searched from 200 to 3000 K).
+
+It also checks every converged steady state of the run (main conditions and both sweeps):
+
+$$q = \frac{\theta_{A\ast}/\theta_\ast}{(K\,p/P^\circ)^{1/n}} .$$
+
+$q = 1$ means the probe step is at equilibrium in that steady state, whatever else covers the surface: an impurity lowers $\theta_{A\ast}$ and $\theta_\ast$ together but cannot change their ratio, so at equilibrium it acts only through $\theta_\ast$, and $\Pi = (\theta_\ast/\theta_{\ast,\mathrm{ref}})^n$. $q < 1$: other reactions consume A∗ faster than dissociation replaces it, so the probe step is not equilibrated and limits the rate; $q > 1$: other reactions produce A∗ (for example an impurity decomposing), which leaves as A₂.
+
+**Design choices.** $K$ comes from the thermochemistry, fast at any temperature; the rate-based $K$ is computed at the grid temperatures as a check (`check_K_rates`, which is 1 for a thermodynamically consistent mechanism). The analysis runs after the sweeps, whose steady states it checks; from an earlier run it reads their tables.
+
+![Equilibrium coverage and the equilibrium check](figures/fig_equilibrium.png)
+
+*Figure 9. Toy model. (a) Isotherms of a surface holding only A, with steady states of the probe gas alone (circles) on them. (b) The same against temperature at three pressures; diamonds: $T_{1/2}$, which rises with pressure. (c) The equilibrium check: $q$ = 1 for the probe gas alone; with the impurity, $q$ is slightly below 1, because the surface reaction consumes A∗.*
+
+**Outputs.** `equilibrium_coverage.csv`, `half_coverage_temperature.csv`, `equilibrium_check.csv`, `equilibrium_coverage.png` (the three panels of Figure 9) and `equilibrium_coverage_per_area.png` ((a) and (b) as $C_\mathrm{H,eq}$). Code: `analyses/equilibrium.py`.
 
 ### 11.3 Reaction orders
 
@@ -1077,7 +1140,7 @@ The analyses of this stage run many solves, often for tens of minutes. Time limi
 
 ![Temperature sweep and degree of rate control](figures/fig_extended_analyses.png)
 
-*Figure 7. Toy model. (a) Arrhenius plot of the forward probe TOF with and without an impurity, annotated with local apparent activation energies (11.2). (b) Degree of rate control of the net formation of the product AI; the values add up to 1 (11.4).*
+*Figure 10. Toy model. (a) Arrhenius plot of the forward probe TOF with and without an impurity, annotated with local apparent activation energies (11.2). (b) Degree of rate control of the net formation of the product AI; the values add up to 1 (11.4).*
 
 ---
 
@@ -1114,7 +1177,7 @@ ctx.outputs['curves']['tolerance']                     # every table is a DataFr
 
 The command line and the notebook share the cache: whatever one solved, the other loads.
 
-**Which analyses.** `analyses = [...]` in `settings.py` chooses them; `--only` (command line) or `only=` (Python) overrides that list for one run. They always run in this order: `steady_state`, `composition`, `diagnostics`, `convergence`, `curves`, `sweep`, `arrhenius`, `pressure_sweep`, `orders`, `rate_control`, `paths`, `transients`, `flux`. `flux` (Stage 2) needs RMG-Py and is not run unless named.
+**Which analyses.** `analyses = [...]` in `settings.py` chooses them; `--only` (command line) or `only=` (Python) overrides that list for one run. They always run in this order: `steady_state`, `composition`, `diagnostics`, `convergence`, `curves`, `sweep`, `arrhenius`, `pressure_sweep`, `equilibrium`, `orders`, `rate_control`, `paths`, `transients`, `flux`. `flux` (Stage 2) needs RMG-Py and is not run unless named.
 
 **How long.** `check` lists, for every chosen analysis, the number of points and solves and how many are already cached, before anything runs (exact for the main conditions, curves, sweep and orders; an estimate for rate control and transients, whose job lists depend on solved states). Rate control dominates: about 50 solves per case and point. For the 196-species Ni mechanism on 8 workers, the full list (without `flux`) took about 2 hours from scratch: main steady states 10 min, curves 20 min, sweep 45 min, orders 10 min, rate control 25 min, the rest a few minutes. Rerunning from the cache takes a few minutes, mostly for recomputing rates from the stored coverages. `flux` takes about 2 minutes per reactor at `n_points = 12`, longer at the default 100.
 
@@ -1183,6 +1246,9 @@ This section is for interpreting the outputs, not for how they are computed (Par
 | From what impurity level is it a problem? | `poisoning_curves_*` (a); `poisoning_tolerance.csv` | `ratio_at_half_rate`, `ppm_of_probe` |
 | Does a higher temperature help? | `temperature_sweep` (c); `release_temperature.csv` | `release_T_K`: where the rate recovers to half |
 | What are the hydrogen rates in Arrhenius form, and how does each impurity shift them? | `arrhenius`; `arrhenius_fits.csv` | $A$, $E_a$ of dissociation, recombination and their ratio; `dEa_vs_reference_kJ_per_mol`, `A_over_reference` |
+| What are the rates in literature units (per area)? | the `…_per_area` figures; `surface_coefficients.csv`; the Format-2 columns ([Stage 7](#stage-7-rates-and-poisoning-metrics)) | `kd_eff_mol_m2_s_Pa`, `J_diss_mol_m2_s`; $k_d$ and $k_r$ as $A\,e^{-E_a/RT}$ |
+| How likely is a molecule to dissociate when it hits the surface? | `surface_exchange_vs_T/_vs_P` (a); `gamma_eff` | the sticking probability, 0 to 1 |
+| How much hydrogen is on the surface at equilibrium, and is the H₂ step at equilibrium? | `equilibrium_coverage`; `equilibrium_check.csv`, `half_coverage_temperature.csv` | `C_H_eq_mol_m2`, `T_half_K`, `q` |
 | Does a higher pressure help? | `pressure_sweep` (c); `half_rate_pressure.csv` | `half_rate_P_bar` and its `direction` |
 | Why is it slower: lost sites, or something else? | `site_blocking`; `blocking_check` in the tables | the rate follows the site-blocking prediction or not |
 | Which species or step controls the rate? | `rate_control_<T>K_<P>bar` (TRC), `…_DRC`; `reaction_orders_*`; `sensitivity.csv`; `reaction_orders.csv` | TRC per species, DRC per reaction, reaction orders |
@@ -1207,6 +1273,9 @@ This section is for interpreting the outputs, not for how they are computed (Par
 | `arrhenius` (11.2a) | (a) intrinsic $k_{\mathrm{diss}}$, $k_{\mathrm{rec}}$ against $1000/T$; (b) van 't Hoff plot of $K$; (c) observed dissociation TOF per case with fits; (d) $E_a$ per case, forward and reverse | (a) a flat $k_{\mathrm{diss}}$ = no barrier, the rate is the impingement flux times $\gamma$; a steep $k_{\mathrm{rec}}$ = activated desorption. (b) $K$ falling with T = exothermic adsorption. (c) points off the line = curved, read the local $E_a$. (d) observed above the dashed intrinsic line = the step waits for free sites; equal forward and reverse bars = the step is at equilibrium | each fit's conditions and $R^2$ in `arrhenius_fits.csv`; only converged sweep points are fitted |
 | `sweep_coverages`, `pressure_sweep_coverages_<T>K` | stacked bars of coverage against T (or p), one panel per case | follow a color across bars to see which adsorbate gives way to which as T (or p) changes; this explains the rate curves | missing bars = no steady state |
 | `pressure_sweep` (Stage 11.2b) | per temperature: (a) TOF against p (log–log), (b) local slope d ln TOF/d ln p, (c) Π against p | (b) for the probe gas alone, slope 1 = few adsorbates, 0 = surface saturated with H\*. With an impurity at fixed purity, slope near −1 = a strong poison that scales with pressure. (c) diamond = the pressure where Π crosses 0.5 | impurities scale with H₂ (same purity), so this is not "more H₂ against a fixed impurity" |
+| `<name>_per_area` (Format 2) | the same figure per area: the rate panel as $k_{d,\mathrm{eff}}$ (or $J_\mathrm{diss}$ for the pressure sweep; $k_d$, $k_r$ in `arrhenius_per_area`); unitless panels unchanged; $\Gamma$ on the axis | the same pattern in the units of literature tables; equal slopes, so equal activation energies. In the pressure series a falling $k_{d,\mathrm{eff}}$ = the surface fills (a constant one = first order) | per atomic area of an ideal facet: literature values per geometric area can be higher by a roughness factor |
+| `surface_exchange_vs_T`, `_vs_P` (Stage 11.2a) | per case: (a) sticking probability $\gamma_\mathrm{eff}$, (b) exchange flux $J_\mathrm{ex}$, (c) hydrogen on the surface $C_\mathrm{H}$; dashed: the clean surface | (a) below the dashed line by $\theta_\ast^2$; an impurity case lower still = the impurity takes the sites. (b) on the dashed $J_0$ = that surface is at its equilibrium coverage; lower = slower isotope exchange. (c) lower than the reference = the impurity displaces hydrogen | $J_\mathrm{ex}$ is the smaller of the two gross fluxes |
+| `equilibrium_coverage`, `…_per_area` (Stage 11.2c) | (a) isotherms of a surface holding only hydrogen, (b) coverage against T with $T_{1/2}$, (c) the equilibrium check $q$ per case | (a) rising as $\sqrt{p}$, then saturating; circles on the lines = the probe-only steady states are at equilibrium. (b) $T_{1/2}$ rises with pressure. (c) $q$ = 1: the H₂ step is at equilibrium; below 1: it is consumed faster than it equilibrates | `check_K_rates` = 1 in `equilibrium_coverage.csv` |
 | `rate_control_<T>K_<P>bar`, `…_DRC` (Stage 11.3–11.4); `reaction_orders_vs_T`, `_vs_P` (11.3) | per point: TRC bars per case; DRC bars for the cases where it is not trivial. Orders: one panel per point | TRC: the bar is $X_{\mathrm{TRC}} = \partial\ln r/\partial(-G/RT)$, how strongly the rate responds when that species is made more stable; negative = it holds sites the reaction needs. Values sum to about −n(1−θ\*) (−2 for H₂ dissociation on a crowded surface). DRC (blue forward, orange net): which elementary steps limit the rate; net values add up to 1. Orders: see Table R4 | DRC near equilibrium is round-off except on the probe step; DRC is shown only where it carries information |
 | `reaction_paths/path_<el>_<case>_<T>K_<P>bar_OneWayFlow.png` (Stage 11.5) | where atoms of one element flow between species at a steady state | arrows = flow direction; label = flux relative to the largest, width = its logarithm; outline thickness = how much of that species there is (coverage or mole fraction, log scale; gray = below 10⁻⁶); nodes show the species' structures. "Scale" below = the largest flux (kmol m⁻² s⁻¹; divide by Γ for s⁻¹). One-way flow shows both directions, so a pair at equilibrium shows two equal arrows | fluxes below 10⁻⁸ of the largest are hidden; the probe step can be 10⁻⁵–10⁻⁶ of an equilibrated exchange |
 | `poisoning_over_time_<T>K_<P>bar` (or `poisoning_over_time_<impurity>_vs_T`, `_vs_P` when a series has more points than impurities) (Stage 11.6) | per point and impurity, up to four per figure: TOF relative to t = 0 (top) and impurity-held sites (bottom) after the impurity arrives; light to dark = more impurity | where a line crosses the dashed 0.5 is the time to half rate. A dip below the final level, then partial recovery, = a transient worse than the steady state (the deepest drop is `min_over_t0`) | half-times are sensitive to the start: quote them to 2 significant figures |
@@ -1222,6 +1291,8 @@ This section is for interpreting the outputs, not for how they are computed (Par
 | `release_temperature.csv` | `release_T_K` | lowest T at which the rate is back to half. Notes: "rate never below half (not poisoning)", "still poisoned at <highest T> K" |
 | `arrhenius_fits.csv` | `A`, `Ea_kJ_per_mol`, `R2`, `conditions`, `dEa_vs_reference_kJ_per_mol`, `A_over_reference`, `curved` | one row per level (intrinsic, observed), quantity and case; `arrhenius_intrinsic.csv` has $k_{\mathrm{diss}}$, $k_{\mathrm{rec}}$, $K$, $\Delta H^\circ$, $\Delta S^\circ$ per T |
 | `half_rate_pressure.csv` | `half_rate_P_bar`, `direction` | probe-gas pressure where Π crosses 0.5, and whether it recovers above or falls below half going up |
+| `surface_coefficients.csv` | `kd_A_mol_m2_s_Pa`, `kd_Ea_kJ_per_mol`, `kr_A_m2_mol_s`, `kr_Ea_kJ_per_mol` | literature-style $k_d$ and $k_r$ per system: the clean metal and each case's steady-state surface |
+| `equilibrium_check.csv`, `half_coverage_temperature.csv` | `q`; `T_half_K` | $q$ = 1 when the H₂ step is at equilibrium; the temperature at which a clean surface is half covered |
 | `reaction_orders.csv` | `order_probe`, `order_impurity` | d ln TOF / d ln p at the point (Table R4) |
 | `sensitivity.csv` | `X_tof_fwd` (TRC rows), `X_probe_consumed` (DRC rows) | TRC: the largest negative values name the site holders; DRC: the rate-limiting steps |
 | `poisoning_over_time.csv` | `t_half_s`, `t_tenth_s`, `min_over_t0`, `end_over_t0`, `t_settle_s` | time to half and to a tenth of the initial rate; deepest drop; final level; time to settle within 10 % |
@@ -1271,7 +1342,7 @@ From Python: `from hydrogen_surface_kinetics import report; report.build('runs/t
 
 **Tables** have all borders, 3 significant figures and "--" for a missing value, with a heavier rule between cases. Per-point results are split like the series: one table for the temperature series and one per pressure-series temperature. A table with more than `report['max_rows']` (60) rows is replaced by a summary made for it, and its caption names the CSV with all the rows. For example, the poisoning curves become one row per impurity and point, and the sensitivity table the main site holder and rate-controlling steps per case and point.
 
-**Figures** come as the PDF of each figure (publication style) or the PNG, every part in order. The reaction-path diagrams of the reference point (the lowest temperature at `reference_pressure`) are in their section, the others in Appendix A (`report['path_diagrams']`).
+**Figures** come as the PDF of each figure (publication style) or the PNG, every part in order. A figure with absolute rates is shown twice, per site and then per area (`…_per_area`, Format 2), each with its reading guide. The reaction-path diagrams of the reference point (the lowest temperature at `reference_pressure`) are in their section, the others in Appendix A (`report['path_diagrams']`).
 
 **Text.** The fixed text (goals, panel descriptions, trends, column meanings) is in `report_text.py`, written from Tables R2–R4; every number comes from the run. Editing `report_text.py` changes every report built afterwards.
 
@@ -1338,7 +1409,8 @@ All code is in the package folder `hydrogen_surface_kinetics/`.
 | `analyses/composition.py` | coverage tables and the surface-composition plot | 8 |
 | `analyses/diagnostics.py` | binding check, switch-off what-if, top reactions | 10 |
 | `analyses/convergence.py` | reactor-method traces with the accepted checkpoint (Figure 4 on real data) | 4 |
-| `analyses/curves.py`, `sweep.py`, `arrhenius.py`, `pressure_sweep.py`, `orders.py`, `rate_control.py`, `paths.py`, `transients.py` | the further analyses | 11.1–11.6 |
+| `analyses/curves.py`, `sweep.py`, `arrhenius.py`, `pressure_sweep.py`, `equilibrium.py`, `orders.py`, `rate_control.py`, `paths.py`, `transients.py` | the further analyses | 11.1–11.6 |
+| `per_area.py` | Format 2: rates per area, sticking probability, exchange flux, the clean-surface constants $k_d$, $k_r$, $K$ | 7, 11 |
 | `analyses/flux.py` | flux-diagram videos of the RMG reactors (optional, needs RMG-Py) | 2 |
 | `analyses/__init__.py` | `run()`: runs the chosen analyses in order, then the report | all |
 | `report.py` | the PDF report: tables, figures and text per analysis, LaTeX build | all |
@@ -1481,7 +1553,7 @@ Every setting of `settings.py`, with its default (from `config.py`). Dictionary 
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `analyses` | `['steady_state']` | any of `steady_state`, `composition`, `diagnostics`, `convergence`, `curves`, `sweep`, `arrhenius`, `pressure_sweep`, `orders`, `rate_control`, `paths`, `transients`, `flux` |
+| `analyses` | `['steady_state']` | any of `steady_state`, `composition`, `diagnostics`, `convergence`, `curves`, `sweep`, `arrhenius`, `pressure_sweep`, `equilibrium`, `orders`, `rate_control`, `paths`, `transients`, `flux` |
 | `plot_style` | `'screen'` | `'screen'` (bold, 300 dpi PNG) or `'publication'` (7 pt, PDF + 600 dpi PNG) |
 | `publication_width_cm` | 17.8 | 17.8 double column, 8.5 single column; tall figures are capped at 22 cm high |
 
@@ -1496,6 +1568,7 @@ Every setting of `settings.py`, with its default (from `config.py`). Dictionary 
 | `sweep` | `temperatures` (None = main range in `step` K), `step` (50), `ratio`, `impurities` (None = every impurity and the mixture); always at `reference_pressure` | 11.2 |
 | `arrhenius` | `temperatures` (None = the temperature sweep's), `min_r2` (0.99: below it a fit is flagged `curved`) | 11.2a |
 | `pressure_sweep` | `pressures` (Pa; None = a log grid over the pressure series), `per_decade` (2), `temperatures` (None = `pressure_temperatures`), `ratio`, `impurities` | 11.2b |
+| `equilibrium` | `temperatures` (None = the temperature series and `pressure_temperatures`), `pressures` (Pa; None = a log grid spanning the pressure series), `per_decade` (4) | 11.2c |
 | `orders` | `ratio`, `delta` (0.10), `impurities`, the series keys | 11.3 |
 | `rate_control` | `cases` (None = reference + every impurity), the series keys, `ratio`, `drc_delta` (0.05), `drc_top_n` (20), `trc_delta` ($10^{6}$ J/kmol), `trc_min_coverage` ($10^{-3}$) | 11.4 |
 | `paths` | `conditions` (`(case, T)` or `(case, T, P)`; None = every case at every series point), `elements` (None = the probe gas's), `threshold` ($10^{-8}$), `flow_type` (`'OneWayFlow'`), `formats` (`['png']`), `style` (`'rmg'` or `'cantera'`), `species_images` (None = `species/` next to `settings.py`, else `output/flux_species/`; False = none), `image_names` (False), `orientation` (`'TB'` or `'LR'`), `edge_labels` (True) | 11.5 |
@@ -1537,6 +1610,7 @@ All files are in the run's `output/` folder. With `plot_style = 'publication'`, 
 | `poisoning_factor`, `slowdown_x` | $\Pi$ and $1/\Pi$ |
 | `blocking_from_theta`, `blocking_full`, `blocking_check` | site-blocking prediction from coverages only; with the site-count factor; $\Pi$ divided by the full prediction |
 | `tof_fwd_B`, `poisoning_factor_B`, `theta_free_B`, `theta_impurity_B` | the same at start B's steady state (Stage 5), where it converged |
+| `J_diss_mol_m2_s`, `J_rec_mol_m2_s`, `J_net_mol_m2_s`, `J_exchange_mol_m2_s`, `kd_eff_mol_m2_s_Pa`, `gamma_eff`, `C_H_mol_m2` | per area (Format 2, [Stage 7](#stage-7-rates-and-poisoning-metrics)); also in `poisoning_curves.csv`, `temperature_sweep.csv` and `pressure_sweep.csv` |
 
 **`steady_state_coverages.csv`** (Stage 8): rows (basis, series, T_K, P_ref_bar, case); one column per surface species with non-zero coverage anywhere.
 
@@ -1559,6 +1633,8 @@ All files are in the run's `output/` folder. With `plot_style = 'publication'`, 
 - `temperature_sweep.csv`, `temperature_sweep.png` (11.2): the same per (case, T), plus `E_app_kJ_per_mol`; `release_temperature.csv`: `release_T_K` and `note` per impurity; `sweep_coverages.png`: what covers the surface against temperature.
 - `arrhenius_intrinsic.csv` (11.2a): `T_K`, `k_diss_clean_1_per_s`, `k_rec_full_1_per_s`, `K_eq`, `dH_thermo_kJ_per_mol`, `dS_thermo_J_per_mol_K`; `arrhenius_fits.csv`: `level` (`intrinsic` or `observed`), `quantity`, `case`, `conditions`, `n_points`, `T_min_K`, `T_max_K`, `A`, `Ea_kJ_per_mol`, `R2`, `dH_kJ_per_mol` and `dS_J_per_mol_K` (for $K$), `dEa_vs_reference_kJ_per_mol`, `A_over_reference`, `curved`; `arrhenius_local.csv`: `case`, `T_K`, `Ea_local_fwd_kJ_per_mol`, `Ea_local_rev_kJ_per_mol`, `fwd_over_rev`; `arrhenius.png`.
 - `pressure_sweep.csv`, `pressure_sweep.png` (11.2b): per (case, T, p), plus `slope_dlnTOF_dlnp`; `half_rate_pressure.csv`: `half_rate_P_bar`, `direction` and `note` per (T, impurity); `pressure_sweep_coverages_<T>K.png`.
+- `surface_coefficients.csv` (11.2a): `system`, `kd_A_mol_m2_s_Pa`, `kd_Ea_kJ_per_mol`, `kd_R2`, `kr_A_m2_mol_s`, `kr_Ea_kJ_per_mol`, `T_min_K`, `T_max_K`, `conditions`; `arrhenius_intrinsic.csv` also has `check_K_thermo`, `kd_clean_mol_m2_s_Pa`, `kr_surface_m2_mol_s`, `gamma_clean`, `theta_H_eq`, `C_H_eq_mol_m2`, `J0_clean_mol_m2_s`; `arrhenius_fits.csv` has `units`. Figures: `arrhenius_per_area.png`, `surface_exchange_vs_T.png`, `surface_exchange_vs_P.png`, and a `…_per_area.png` copy of `rates_summary`, `temperature_sweep` and `pressure_sweep`.
+- `equilibrium_coverage.csv` (11.2c): `T_K`, `p_bar`, `K_eq`, `check_K_rates`, `theta_H_eq`, `theta_v_eq`, `C_H_eq_mol_m2`, `J0_clean_mol_m2_s`; `half_coverage_temperature.csv`: `p_bar`, `T_half_K`, `note`; `equilibrium_check.csv`: `source`, `basis`, `series`, `case`, `T_K`, `P_ref_bar`, `theta_H`, `theta_v`, `theta_H_over_theta_v`, `equilibrium_ratio`, `q`; `equilibrium_coverage.png`, `equilibrium_coverage_per_area.png`.
 - `reaction_orders.csv` (11.3): `series`, `T_K`, `P_ref_bar`, `case`, `tof_fwd_base`, `order_probe`, `order_impurity`, `all_starts_agree`.
 - `rate_control_<T>K_<P>bar.png` (11.3–11.4), one per point: TRC per case; `rate_control_<T>K_<P>bar_DRC.png`: the DRC, for the cases where it is not trivial; `reaction_orders_vs_T/_vs_P.png` (11.3): orders per case, one panel per point.
 - `sensitivity.csv` (11.4): `kind` (DRC or TRC), `series`, `T_K`, `P_ref_bar`, `case`, `item` (reaction index or species), `label`, `X_tof_fwd`, `X_probe_consumed`, `methods` (solver used for the + and − perturbations).

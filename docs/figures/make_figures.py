@@ -114,9 +114,9 @@ class FixedGasSurface:
         return float(np.max(np.abs(r) / (ABS_TOL + REL_GROSS_TOL * gross)))
 
 
-def steady(T, p_I, theta0, multipliers=None, t_max=1e8):
+def steady(T, p_I, theta0, multipliers=None, t_max=1e8, p_A2=P_A2):
     """Integrate until TOF and coverages stop changing between half-decade checkpoints."""
-    s = FixedGasSurface(T, p_I, theta0, multipliers)
+    s = FixedGasSurface(T, p_I, theta0, multipliers, p_A2=p_A2)
     prev = None
     for t in np.logspace(-8, np.log10(t_max), int(2 * (np.log10(t_max) + 8)) + 1):
         s.advance(t)
@@ -491,6 +491,155 @@ def fig_extended():
     save(fig, 'fig_extended_analyses.png')
 
 
+# ----------------------------------------------------------------------------------
+# Format 2 (per area) and equilibrium coverage: docs/rates_units_equilibrium.md
+# ----------------------------------------------------------------------------------
+P0 = 1e5           # Pa, standard pressure of K
+R_MOL = ct.gas_constant / 1e3
+
+
+def per_area(s, p_A2=P_A2):
+    """Format-2 numbers of a solved toy surface: fluxes per m2, kd_eff, sticking probability,
+    exchange flux and hydrogen on the surface."""
+    G = s.gamma * 1e3                                              # mol sites / m2
+    M = s.gas.molecular_weights[s.gas.species_index('A2')] / 1e3   # kg / mol
+    fwd = s.surf.forward_rates_of_progress[0] * 1e3                # mol A2 / m2 / s
+    rev = s.surf.reverse_rates_of_progress[0] * 1e3
+    T = s.surf.T
+    Z = p_A2 / np.sqrt(2 * np.pi * M * R_MOL * T)
+    th = s.theta
+    return {'tof': fwd / G, 'J_diss': fwd, 'kd_eff': fwd / p_A2, 'gamma': fwd / Z, 'J_ex': min(fwd, rev),
+            'C_H': th['A(s)'] * G, 'theta_H': th['A(s)'], 'theta_v': th['S'], 'G': G}
+
+
+def K_eq(T):
+    """Dimensionless K = theta_A^2 / (theta_v^2 p/P0) of A2 + 2 S <=> 2 A(s), from the thermochemistry."""
+    gas = ct.Solution(YAML, 'gas')
+    surf = ct.Interface(YAML, 'surface', [gas])
+    g = lambda sp: sp.thermo.h(T) - T * sp.thermo.s(T)                          # noqa: E731
+    dG = 2 * g(surf.species('A(s)')) - g(gas.species('A2')) - 2 * g(surf.species('S'))
+    return np.exp(-dG / (ct.gas_constant * T)) * P0 / gas.species('A2').thermo.reference_pressure
+
+
+def theta_eq(K, p):
+    x = np.sqrt(K * np.asarray(p, dtype=float) / P0)
+    return x / (1 + x)
+
+
+def fig_per_area():
+    """Format 1 against Format 2: the same temperature sweep per site and per area, and the
+    effective adsorption coefficient against pressure."""
+    temps = np.arange(450.0, 651.0, 25.0)
+    cases = [('A$_2$ only', 0.0, INK, 'o'), ('with $p_I$ = 1 Pa', 1.0, BLUE, 's')]
+    sweep = {label: [per_area(steady(T, p_I, 'S:1')) for T in temps] for label, p_I, _, _ in cases}
+    pressures = np.logspace(np.log10(3e3), np.log10(3e6), 7)
+    psweep = [per_area(steady(T_REF, 0.0, 'S:1', p_A2=p), p) for p in pressures]
+    kd_clean = psweep[0]['J_diss'] / pressures[0] / psweep[0]['theta_v'] ** 2      # kd = J / (p theta_v^2)
+    G = psweep[0]['G']
+    fig, axes = plt.subplots(1, 3, figsize=(13.0, 3.8))
+    inv = 1000.0 / temps
+    for (label, _, color, marker) in cases:
+        for ax, key in zip(axes[:2], ('tof', 'kd_eff')):
+            y = np.array([d[key] for d in sweep[label]])
+            slope = np.polyfit(1 / temps, np.log(y), 1)[0]
+            ax.plot(inv, y, marker=marker, color=color, lw=1.5, ms=4.5, label=f'{label}: $E_a$ = {-slope * R_MOL / 1e3:.1f} kJ/mol')
+    axes[0].set_ylabel('TOF (s$^{-1}$, per site)')
+    axes[0].set_title('a) Format 1: per site')
+    axes[1].set_ylabel('$k_{d,\\mathrm{eff}}$ (mol A$_2$ m$^{-2}$ s$^{-1}$ Pa$^{-1}$)')
+    axes[1].set_title(f'b) Format 2: per area ($\\Gamma$ = {G:.2g} mol m$^{{-2}}$)')
+    for ax in axes[:2]:
+        ax.set_yscale('log')
+        ax.set_xlabel('1000 / T  (K$^{-1}$)')
+        ax.legend(loc='lower left', fontsize=7.5)
+        style(ax)
+    ax = axes[2]
+    ax.plot(pressures / 1e5, [d['kd_eff'] for d in psweep], 'o-', color=INK, lw=1.5, ms=4.5, label='$k_{d,\\mathrm{eff}} = k_d\\,\\theta_v^2$, A$_2$ only')
+    ax.axhline(kd_clean, color=MUTED, ls='--', lw=1.2, label='$k_d$, clean surface (first order)')
+    ax.set_xscale('log')
+    ax.set_yscale('log')
+    ax.set_xlabel('p(A$_2$) (bar)')
+    ax.set_ylabel('mol A$_2$ m$^{-2}$ s$^{-1}$ Pa$^{-1}$')
+    ax.set_title(f'c) Against pressure, {T_REF:.0f} K')
+    ax.legend(loc='lower left', fontsize=7.5)
+    style(ax)
+    fig.suptitle('Toy model: the same rates per site and per area; activation energies are unchanged, only the prefactor and units differ',
+                 x=0.01, ha='left', fontsize=10, color=SECONDARY)
+    fig.tight_layout()
+    save(fig, 'fig_per_area.png')
+
+
+def fig_sticking_exchange():
+    """Sticking probability, exchange flux and hydrogen on the surface against temperature."""
+    temps = np.arange(450.0, 651.0, 25.0)
+    cases = [('A$_2$ only', 0.0, INK, 'o'), ('with $p_I$ = 1 Pa', 1.0, BLUE, 's')]
+    data = {label: [per_area(steady(T, p_I, 'S:1')) for T in temps] for label, p_I, _, _ in cases}
+    clean = [per_area(FixedGasSurface(T, 0.0, 'S:1')) for T in temps]          # empty surface: gamma of the mechanism
+    G = clean[0]['G']
+    th = theta_eq(np.array([K_eq(T) for T in temps]), P_A2)
+    J0 = np.array([c['J_diss'] for c in clean]) * (1 - th) ** 2                # kd p theta_v,eq^2
+    fig, axes = plt.subplots(1, 3, figsize=(13.0, 3.8))
+    for label, _, color, marker in cases:
+        d = data[label]
+        axes[0].plot(temps, [x['gamma'] for x in d], marker=marker, color=color, lw=1.5, ms=4.5, label=label)
+        axes[1].plot(1000 / temps, [x['J_ex'] for x in d], marker=marker, color=color, lw=1.5, ms=4.5, label=label)
+        axes[2].plot(temps, [x['C_H'] for x in d], marker=marker, color=color, lw=1.5, ms=4.5, label=label)
+    dash = dict(color=MUTED, ls='--', lw=1.2)
+    axes[0].plot(temps, [c['gamma'] for c in clean], label='clean surface (mechanism)', **dash)
+    axes[1].plot(1000 / temps, J0, label='clean surface at equilibrium, $J_0$', **dash)
+    axes[2].plot(temps, th * G, label='clean surface at equilibrium', **dash)
+    axes[0].set(yscale='log', xlabel='T (K)', ylabel='$\\gamma_\\mathrm{eff} = J_\\mathrm{diss}/Z$', title='a) Sticking probability')
+    axes[1].set(yscale='log', xlabel='1000 / T  (K$^{-1}$)', ylabel='$J_\\mathrm{ex}$ (mol A$_2$ m$^{-2}$ s$^{-1}$)', title='b) Exchange flux')
+    axes[2].set(xlabel='T (K)', ylabel='$C_\\mathrm{H}$ (mol H m$^{-2}$)', title='c) Hydrogen on the surface')
+    for ax in axes:
+        ax.legend(fontsize=7.5)
+        style(ax)
+    fig.suptitle(f'Toy model, p(A$_2$) = 1 bar: Format 2 quantities; $\\Gamma$ = {G:.2g} mol m$^{{-2}}$',
+                 x=0.01, ha='left', fontsize=10, color=SECONDARY)
+    fig.tight_layout()
+    save(fig, 'fig_sticking_exchange.png')
+
+
+def fig_equilibrium():
+    """Equilibrium coverage of a surface holding only A, and the equilibrium check of steady states."""
+    p_line = np.logspace(np.log10(3e3), np.log10(3e6), 80)
+    T_line = np.linspace(380.0, 720.0, 80)
+    K_line = np.array([K_eq(T) for T in T_line])
+    fig, axes = plt.subplots(1, 3, figsize=(13.0, 3.8))
+    for T, color in ((450.0, ORANGE), (500.0, INK), (550.0, BLUE)):
+        axes[0].plot(p_line / 1e5, theta_eq(K_eq(T), p_line), color=color, lw=1.5, label=f'{T:.0f} K')
+    for p in (3e4, 3e5):
+        d = per_area(steady(T_REF, 0.0, 'S:1', p_A2=p), p)
+        axes[0].plot(p / 1e5, d['theta_H'], 'o', mfc='white', mec=INK, mew=1.4, ms=6)
+    axes[0].plot([], [], 'o', mfc='white', mec=INK, mew=1.4, label='steady states, 500 K')
+    for p, color in ((3e4, YELLOW), (1e5, MAGENTA), (3e5, GREEN)):
+        axes[1].plot(T_line, theta_eq(K_line, p), color=color, lw=1.5, label=f'{p / 1e5:g} bar')
+        i = np.nonzero(np.diff(np.sign(np.log(K_line * p / P0))))[0][0]           # K p/P0 = 1
+        a, b = T_line[i], T_line[i + 1]
+        fa, fb = np.log(K_line[i] * p / P0), np.log(K_line[i + 1] * p / P0)
+        axes[1].plot(a - fa * (b - a) / (fb - fa), 0.5, 'D', mfc='white', mec=color, mew=1.5, ms=7)
+    axes[0].set(xscale='log', xlabel='p(A$_2$) (bar)', ylabel='$\\theta_\\mathrm{A,eq}$', ylim=(0, 1.02),
+                title='a) Isotherms, surface holding only A')
+    axes[1].set(xlabel='T (K)', ylabel='$\\theta_\\mathrm{A,eq}$', ylim=(0, 1.02), title='b) Against T; diamonds: $T_{1/2}$')
+    pts = (3e4, 1e5, 3e5)
+    for j, (label, p_I, color) in enumerate((('A$_2$ only', 0.0, INK), ('with I, r = 10$^{-5}$', None, BLUE))):
+        q = []
+        for p in pts:
+            d = per_area(steady(T_REF, 1e-5 * p if p_I is None else p_I, 'S:1', p_A2=p), p)
+            q.append(d['theta_H'] / d['theta_v'] / np.sqrt(K_eq(T_REF) * p / P0))
+        axes[2].plot(np.arange(3) + (j - 0.5) * 0.12, q, 'o', color=color, ms=6, label=label)
+    axes[2].axhline(1.0, color=MUTED, ls='--', lw=1)
+    axes[2].set_xticks(range(3), [f'{T_REF:.0f} K\n{p / 1e5:g} bar' for p in pts])
+    axes[2].set(ylim=(0.998, 1.002), ylabel='$q = (\\theta_\\mathrm{A}/\\theta_v)\\,/\\,(K p/P^\\circ)^{1/2}$',
+                title='c) Equilibrium check of steady states')
+    for ax in axes:
+        ax.legend(fontsize=7.5)
+        style(ax)
+    fig.suptitle('Toy model: equilibrium of A$_2$ + 2* $\\rightleftharpoons$ 2A* from the thermochemistry',
+                 x=0.01, ha='left', fontsize=10, color=SECONDARY)
+    fig.tight_layout()
+    save(fig, 'fig_equilibrium.png')
+
+
 if __name__ == '__main__':
     fig_reactor_models()
     fig_site_counting()
@@ -499,3 +648,6 @@ if __name__ == '__main__':
     fig_bistability()
     fig_flux_anatomy()
     fig_extended()
+    fig_per_area()
+    fig_sticking_exchange()
+    fig_equilibrium()

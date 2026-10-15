@@ -16,7 +16,7 @@ from conftest import TOY_SETTINGS, write_settings
 SMALL = """
 pressures = [3e4, 3e5]                # pressure series at 500 K: 0.3, 1 (shared) and 3 bar
 analyses = ['steady_state', 'composition', 'diagnostics', 'convergence', 'curves', 'sweep', 'arrhenius', 'pressure_sweep',
-            'orders', 'rate_control', 'paths', 'transients']
+            'equilibrium', 'orders', 'rate_control', 'paths', 'transients']
 plot_style = 'publication'
 diagnostics = {'adsorption_checks': [('A2 -> 2 A*', {'A2': 1, 'S': 2}, {'A(s)': 2}, (-100, -60), 'made up')],
                'switch_off': 'I(ss)', 'top_reactions': [('I', 500.0, 'A(s)')]}
@@ -219,3 +219,48 @@ def test_report_command(ctx, capsys):
     """The report can be rebuilt from the saved results alone."""
     assert cli_main(['report', ctx.cfg.settings_file, '--tex-only']) == 0
     assert 'report: wrote' in capsys.readouterr().out
+
+
+def test_per_area_outputs(ctx):
+    """Format 2: the per-area columns in every results table, the _per_area figures, and fits
+    whose Ea equals the per-site Ea (only A changes)."""
+    import pandas as pd
+    out = ctx.cfg.output_dir
+    for name in ('steady_state_results.csv', 'poisoning_curves.csv', 'temperature_sweep.csv', 'pressure_sweep.csv'):
+        df = pd.read_csv(os.path.join(out, name))
+        for col in ('J_diss_mol_m2_s', 'J_rec_mol_m2_s', 'J_exchange_mol_m2_s', 'kd_eff_mol_m2_s_Pa', 'gamma_eff', 'C_H_mol_m2'):
+            assert col in df, (name, col)
+        ok = df[df['converged'].astype(bool)]
+        assert (ok['J_exchange_mol_m2_s'] <= ok[['J_diss_mol_m2_s', 'J_rec_mol_m2_s']].min(axis=1) * (1 + 1e-12)).all()
+        assert ((ok['gamma_eff'] > 0) & (ok['gamma_eff'] <= 1)).all()
+    for stem in ('rates_summary_vs_T_per_area', 'rates_summary_vs_P_per_area', 'temperature_sweep_per_area',
+                 'pressure_sweep_per_area', 'arrhenius_per_area', 'surface_exchange_vs_T', 'surface_exchange_vs_P'):
+        assert os.path.exists(os.path.join(out, stem + '.pdf')), stem
+    fits = ctx.outputs['arrhenius']['fits'].set_index(['case', 'quantity'])
+    for case in ('probe only', 'I'):
+        tof = fits.loc[(case, 'dissociation (forward TOF)')]
+        kd = fits.loc[(case, 'effective adsorption coefficient k_d,eff (per area)')]
+        assert np.isclose(kd['Ea_kJ_per_mol'], tof['Ea_kJ_per_mol'])          # converting does not change Ea
+    intr = ctx.outputs['arrhenius']['intrinsic']
+    assert np.allclose(intr['gamma_clean'], 0.05) and np.allclose(intr['check_K_thermo'], 1.0)
+    coeffs = ctx.outputs['arrhenius']['coefficients']
+    assert len(coeffs) == 3 and coeffs['kr_A_m2_mol_s'].nunique() == 1    # clean + one per case; one k_r
+
+
+def test_equilibrium(ctx):
+    """The probe step of the toy is (nearly) at equilibrium in every steady state; T_1/2 solves
+    K p/P0 = 1; K from the rates equals K from the thermochemistry."""
+    from hydrogen_surface_kinetics.analyses.equilibrium import K_thermo
+    out = ctx.outputs['equilibrium']
+    check = out['check']
+    assert set(check['source']) == {'main', 'temperature sweep', 'pressure sweep'}
+    assert np.allclose(check['q'], 1.0, atol=1e-3)
+    assert np.allclose(check[check['case'] == 'probe only']['q'], 1.0, atol=1e-6)
+    assert np.allclose(out['coverage']['check_K_rates'], 1.0)
+    half = out['half'].set_index('p_bar')
+    T = half.loc[1.0, 'T_half_K']
+    assert 500 < T < 600 and np.isclose(K_thermo(ctx.model, T), 1.0, rtol=1e-6)        # K p/P0 = 1 at p = P0
+    assert half['T_half_K'].is_monotonic_increasing                         # more pressure, covered to higher T
+    for name in ('equilibrium_coverage.csv', 'half_coverage_temperature.csv', 'equilibrium_check.csv',
+                 'equilibrium_coverage.pdf', 'equilibrium_coverage_per_area.pdf'):
+        assert os.path.exists(os.path.join(ctx.cfg.output_dir, name)), name

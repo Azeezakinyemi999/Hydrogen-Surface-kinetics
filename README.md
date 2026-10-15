@@ -18,6 +18,7 @@ Temperature and pressure effects are kept apart: a **temperature series** (`temp
 | `sweep` | Arrhenius plot, apparent activation energy, the temperature at which poisoning lifts, surface coverage against T |
 | `arrhenius` | the hydrogen rates as $A\,\exp(-E_a/RT)$: intrinsic dissociation, recombination and equilibrium constants of the metal, and the observed rates per case, with each impurity's $\Delta E_a$ and $A/A_{\mathrm{ref}}$ (no solving) |
 | `pressure_sweep` | rate against H₂ pressure at fixed purity, its local slope, the half-rate pressure, surface coverage against p |
+| `equilibrium` | equilibrium coverage of hydrogen from the thermochemistry (isotherms, the half-coverage temperature) and whether the H₂ step is at equilibrium in every steady state (no solving) |
 | `orders` | reaction orders in the probe gas and the impurity |
 | `rate_control` | thermodynamic rate control (TRC) and degree of rate control (DRC), one figure per (T, p) point |
 | `paths` | element-flux diagrams at a steady state |
@@ -50,7 +51,7 @@ bash run.sh runs/try_2/Cu runs/try_2/Fe runs/try_2/Ni   # several runs, one afte
 
 Give each run as its folder or its `settings.py` (globs such as `runs/try_*/Ni` work), then `check` or `status` if wanted, then options; the options apply to every run. A failed run does not stop the others, and a summary at the end lists any that failed.
 
-Tables (CSV) and figures (PNG, plus PDF in publication style) go to `runs/<name>/output/`, and the log to `runs/<name>/run.log`. A run of every analysis in `settings.py` ends with a PDF report, `output/report/<run>_report.pdf`: one section per analysis with its goal, key numbers, bordered tables, figures and how to read each figure panel by panel (needs LaTeX; `--no-report` skips it). Every solve is cached, so a rerun only solves what changed. `run.sh` keeps the Mac awake during long runs; the full Ni analysis takes about 2 hours on 8 cores the first time.
+Tables (CSV) and figures (PNG, plus PDF in publication style) go to `runs/<name>/output/`, and the log to `runs/<name>/run.log`. Every rate is given per site (TOF, s⁻¹) and also per area in the units of the hydrogen-surface literature (mol H₂ m⁻² s⁻¹, mol H₂ m⁻² s⁻¹ Pa⁻¹, the sticking probability; `…_per_area` figures; see [docs/rates_units_equilibrium.md](docs/rates_units_equilibrium.md)). A run of every analysis in `settings.py` ends with a PDF report, `output/report/<run>_report.pdf`: one section per analysis with its goal, key numbers, bordered tables, figures and how to read each figure panel by panel (needs LaTeX; `--no-report` skips it). Every solve is cached, so a rerun only solves what changed. `run.sh` keeps the Mac awake during long runs; the full Ni analysis takes about 2 hours on 8 cores the first time.
 
 Or from Python / Jupyter (see `notebooks/analyze.ipynb`):
 
