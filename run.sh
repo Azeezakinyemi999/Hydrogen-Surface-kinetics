@@ -8,20 +8,23 @@
 #   bash run.sh runs/ni_first_try --workers 4 --recompute
 #   bash run.sh runs/try_2/* check                        # only check the settings (fast)
 #   bash run.sh runs/ni_first_try status                  # what is cached / saved
+#   bash run.sh runs/try_4/Cu report                      # rebuild the PDF report (no solving)
 #
-# The runs come first, then check or status (default: run), then the options, which apply to
-# every run. Every run is looked up before the first starts. A failed run does not stop the
-# rest; the exit status is that of the last failed run (0 if none). Ctrl-C stops them all.
+# A run of everything in settings.py ends with the PDF report in <run folder>/output/report/
+# (--no-report skips it). The runs come first, then check, status or report (default: run),
+# then the options, which apply to every run. Every run is looked up before the first starts.
+# A failed run does not stop the rest; the exit status is that of the last failed run (0 if
+# none). Ctrl-C stops them all.
 # Each run's output goes to the screen and to <run folder>/run.log (appended).
 # Environment variables: PYTHON (default: the rmg4.0 conda env's python).
 set -euo pipefail
 
 if [[ $# -lt 1 ]]; then
-    sed -n '2,16p' "$0"; exit 1
+    sed -n '2,19p' "$0"; exit 1
 fi
 
 SETTINGS=()
-while [[ $# -gt 0 && "$1" != -* && "$1" != check && "$1" != status ]]; do
+while [[ $# -gt 0 && "$1" != -* && "$1" != check && "$1" != status && "$1" != report ]]; do
     ARG="${1%/}"; shift
     if [[ -d "$ARG" ]]; then
         [[ -f "$ARG/settings.py" ]] || { echo "no settings.py in $ARG (an RMG input.py is not the package settings file)" >&2; exit 1; }
@@ -33,7 +36,7 @@ done
 [[ ${#SETTINGS[@]} -gt 0 ]] || { echo "give the run folders first: bash run.sh runs/<name> $1" >&2; exit 1; }
 
 COMMAND=run
-if [[ $# -gt 0 && ( "$1" == check || "$1" == status ) ]]; then
+if [[ $# -gt 0 && ( "$1" == check || "$1" == status || "$1" == report ) ]]; then
     COMMAND="$1"; shift
 fi
 

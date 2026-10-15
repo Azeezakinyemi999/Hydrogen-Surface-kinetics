@@ -136,7 +136,7 @@ def run(ctx):
     for col, what, cond in (('k_diss_clean_1_per_s', 'dissociation k_diss (intrinsic)', clean),
                             ('k_rec_full_1_per_s', 'recombination k_rec (intrinsic)',
                              f'surface full of {probe} adsorbate'),
-                            ('K_eq', 'equilibrium K = k_diss / k_rec (intrinsic)', 'per bar; van t Hoff form')):
+                            ('K_eq', 'equilibrium K = k_diss / k_rec (intrinsic)', "dimensionless, P° = 1 bar; van 't Hoff form")):
         f = fit(intr['T_K'], intr[col])
         row = {'level': 'intrinsic', 'quantity': what, 'case': '(clean surface)', 'conditions': cond, **f}
         if col == 'K_eq':                  # ln K = -dH/RT + dS/R
