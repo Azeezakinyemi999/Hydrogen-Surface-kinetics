@@ -13,6 +13,7 @@ dependencies = [
     "numpy",
     "pandas",
     "matplotlib",
+    "pyyaml",
 ]
 
 [project.optional-dependencies]

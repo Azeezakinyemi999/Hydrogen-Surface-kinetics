@@ -104,18 +104,21 @@ def run(ctx):
                                                accepted_s=res['accepted_s'], error=res['error']))
     if tables:
         ctx.save_table(pd.concat(tables), 'convergence.csv')
-        fig = plot_convergence(ctx, jobs, out)
-        P.save(fig, ctx.path('convergence.png'), cfg)
-        plt.close(fig)
+        P.save_parts(plot_convergence(ctx, jobs, out), ctx.path('convergence.png'), cfg)
     ctx.outputs['convergence'] = out
     return out
 
 
 def plot_convergence(ctx, jobs, results, max_named=6, min_peak=0.01):
     """One row per condition: (a) coverages, (b) forward TOF, (c) normalized residual, against
-    time; a dashed line where the reactor method accepts the state."""
-    model = ctx.model
+    time; a dashed line where the reactor method accepts the state. Returns the figures (at
+    most three rows each)."""
     jobs = [j for j in jobs if results[j['key']]['status'] == 'done' and len(results[j['key']]['trajectory'])]
+    return [_convergence_page(ctx, page, results, max_named, min_peak) for page in P.pages(jobs, P.rows_per_page(3))]
+
+
+def _convergence_page(ctx, jobs, results, max_named, min_peak):
+    model = ctx.model
     fig, axes = plt.subplots(len(jobs), 3, figsize=(15, 3.9 * len(jobs)), squeeze=False)
     for row, job in zip(axes, jobs):
         res, r = results[job['key']], job['row']

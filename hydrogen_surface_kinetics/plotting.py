@@ -21,6 +21,7 @@ DIVERGING_LOW, DIVERGING_HIGH = '#2a78d6', '#e34948'   # blue <-> red poles; neu
 MARKERS = ['o', 's', 'D', '^', 'v', 'P', 'X', '*']
 PUB_FONT_PT = 7
 PUB_MAX_HEIGHT_CM = 22.0          # printable page height
+MAX_PANELS, MAX_ROWS, MAX_COLS = 9, 3, 4   # per figure; more panels are split into name_1, name_2, ...
 
 mpl.rcParams.update({'figure.dpi': 150, 'savefig.dpi': 300, 'pdf.fonttype': 42, 'ps.fonttype': 42,
                      'font.family': 'sans-serif', 'font.sans-serif': ['Arial', 'Helvetica', 'DejaVu Sans'],
@@ -45,6 +46,29 @@ def style_axis(ax, title='', ylabel=''):
     ax.tick_params(colors='#55544f', labelsize=9)
     ax.grid(axis='y', color=GRID, linewidth=0.6)
     ax.set_axisbelow(True)
+
+
+def pages(items, size):
+    """`items` in the fewest groups of at most `size`, as even as possible (9 items, size 4:
+    3 + 3 + 3)."""
+    items = list(items)
+    if not items:
+        return []
+    n = -(-len(items) // max(1, size))
+    k = -(-len(items) // n)
+    return [items[i:i + k] for i in range(0, len(items), k)]
+
+
+def rows_per_page(ncol):
+    """How many rows of `ncol` panels one figure holds."""
+    return max(1, min(MAX_ROWS, MAX_PANELS // ncol))
+
+
+def grid_shape(n, max_cols=MAX_COLS):
+    """(rows, columns) for n <= MAX_PANELS panels: one row up to max_cols, then as square as
+    the limits allow (5 -> 2 x 3, 7 -> 2 x 4, 9 -> 3 x 3)."""
+    nrow = -(-n // max_cols)
+    return nrow, -(-n // nrow)
 
 
 def keep_title(ax, text):
@@ -87,6 +111,16 @@ def sub(s):
     return s if '$' in s else _FORMULA.sub(lambda m: f'$_{{{m.group(0)}}}$', s)   # H2 -> H$_2$
 
 
+def panel_letter(i):
+    """The label of panel i (from 0): a, b, ..., z, aa, ab, ..."""
+    s = ''
+    i += 1
+    while i:
+        i, r = divmod(i - 1, 26)
+        s = chr(97 + r) + s
+    return s
+
+
 def _publication(fig, width_cm):
     w, h = fig.get_size_inches()
     W = width_cm / 2.54
@@ -102,7 +136,7 @@ def _publication(fig, width_cm):
         title = title.split(':')[0]                         # keep condition titles ("300 K", "CO, 300 K")
         if not (getattr(ax, '_hsk_keep_title', False) or re.search(r'\d\s*K\b', title)):
             title = ''
-        letter = rf'$\bf{{({chr(97 + i)})}}$ ' if len(axes) > 1 else ''
+        letter = rf'$\bf{{({panel_letter(i)})}}$ ' if len(axes) > 1 else ''
         ax.set_title(letter + sub(title), loc='left', fontsize=PUB_FONT_PT + 1)
         for axis, set_ticks in ((ax.xaxis, ax.set_xticks), (ax.yaxis, ax.set_yticks)):   # category labels
             labels = axis.get_ticklabels()
@@ -127,7 +161,8 @@ def _publication(fig, width_cm):
         loc = 'outside right center' if anchor.x0 >= 0.99 else 'outside upper center'
         handles, labels = leg.legend_handles, [t.get_text() for t in leg.get_texts()]
         title = leg.get_title().get_text()
-        ncol = 1 if loc.endswith('right center') else max(1, len(labels))
+        entry_cm = 1.0 + 0.13 * max((len(re.sub(r'[${}_\\]', '', l)) for l in labels), default=0)  # marker + 7 pt text
+        ncol = 1 if loc.endswith('right center') else max(1, min(len(labels), int(W * 2.54 // entry_cm)))
         leg.remove()
         fig.legend(handles, [sub(l) for l in labels], loc=loc, ncol=ncol, frameon=False,
                    title=sub(title) or None, fontsize=PUB_FONT_PT, title_fontsize=PUB_FONT_PT)
@@ -167,6 +202,29 @@ def save(fig, path, cfg=None, style=None):
     else:
         fig.savefig(stem + '.png', dpi=300, bbox_inches='tight')
         written.append(stem + '.png')
+    return written
+
+
+def save_parts(figs, path, cfg=None, style=None):
+    """Save the parts of one figure and close them: a single part as `path`, several as
+    path_1, path_2, ... Parts left from an earlier run with a different count are removed.
+    Returns the list of files written."""
+    figs = [f for f in figs if f is not None]
+    if not figs:
+        return []
+    stem, ext = os.path.splitext(path)
+    folder, base = os.path.split(stem)
+    names = [path] if len(figs) == 1 else [f'{stem}_{i}{ext}' for i in range(1, len(figs) + 1)]
+    keep = {os.path.splitext(os.path.basename(n))[0] for n in names}
+    part = re.compile(re.escape(base) + r'(_\d+)?\.(png|pdf)')
+    if os.path.isdir(folder or '.'):
+        for f in os.listdir(folder or '.'):
+            if part.fullmatch(f) and os.path.splitext(f)[0] not in keep:
+                os.remove(os.path.join(folder, f))
+    written = []
+    for fig, name in zip(figs, names):
+        written += save(fig, name, cfg, style)
+        plt.close(fig)
     return written
 
 

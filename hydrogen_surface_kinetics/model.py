@@ -6,6 +6,8 @@ optional molecular adsorption, and resolves the impurities. It creates a fresh s
 object for every solve (see Model.new_surface).
 """
 import hashlib
+import os
+import re
 import warnings
 
 import cantera as ct
@@ -13,9 +15,55 @@ import numpy as np
 
 from .config import site_density_kmol_m2
 
+UNMATCHED_DUPLICATE = 'No duplicate found for declared duplicate reaction'
+
 
 class ModelError(ValueError):
     pass
+
+
+def equation_species(equation):
+    """The species of a Cantera equation, grouped the way Kinetics::checkDuplicates groups
+    reactions: each side's species once, both sides together (a reaction matches its reverse)."""
+    eq = re.sub(r'\s\(\+\s*[^\s)]+\)', ' ', equation)                 # falloff third body (+M)
+    sides = re.split(r'\s(?:<=>|=>|=)\s', eq, maxsplit=1)
+    names = [n for side in sides for n in {t.split()[-1] for t in side.split(' + ') if t.strip()}]
+    return tuple(sorted(n for n in names if n != 'M'))
+
+
+def remove_unmatched_duplicates(source, target):
+    """Copy the Cantera YAML `source` to `target`, without the `duplicate: true` of reactions
+    that have no other duplicate-marked reaction with the same species (RMG output sometimes
+    has them, and Cantera then refuses the file). The flag does not change any rate. Returns
+    the number of flags removed; the first line of `target` records the source's sha256."""
+    import yaml
+    with open(source, 'rb') as f:
+        data = f.read()
+    text = data.decode()
+    root = yaml.compose(text, Loader=getattr(yaml, 'CSafeLoader', yaml.SafeLoader))
+    flag_lines = {}                                                    # species -> lines of the flags
+    for _, section in root.value:
+        if not isinstance(section, yaml.SequenceNode):
+            continue
+        for node in section.value:
+            if not isinstance(node, yaml.MappingNode):
+                continue
+            fields = {k.value: (k, v) for k, v in node.value if isinstance(k, yaml.ScalarNode)}
+            dup = fields.get('duplicate')
+            if 'equation' in fields and dup and str(dup[1].value).lower() in ('true', 'yes', 'on'):
+                key = equation_species(fields['equation'][1].value)
+                flag_lines.setdefault(key, []).append(dup[0].start_mark.line)
+    lines = text.splitlines(keepends=True)
+    drop = [found[0] for found in flag_lines.values() if len(found) == 1]
+    for i in drop:
+        if not re.fullmatch(r'\s*duplicate:\s*\w+\s*', lines[i]):
+            raise ModelError(f'{source} line {i + 1}: expected "duplicate: true" on a line of its own')
+        lines[i] = ''
+    with open(target, 'w') as f:
+        f.write(f'# {source} (sha256 {hashlib.sha256(data).hexdigest()}) without the duplicate flag '
+                f'of {len(drop)} reactions that have no duplicate\n')
+        f.writelines(lines)
+    return len(drop)
 
 
 def find_role_reaction(surf, gas_species, site, adsorbate):
@@ -38,10 +86,11 @@ class Model:
     def __init__(self, cfg):
         self.cfg = cfg
         self.warnings = []
+        with open(cfg.mechanism, 'rb') as f:
+            self.mechanism_sha256 = hashlib.sha256(f.read()).hexdigest()
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter('always')
-            self.gas = ct.Solution(cfg.mechanism, cfg.gas_phase, transport_model=None)
-            self.surf = ct.Interface(cfg.mechanism, cfg.surface_phase, [self.gas])
+            self.mechanism_file = self._load_mechanism()
         self.sticking_warnings = [str(w.message).strip() for w in caught if 'Sticking coefficient' in str(w.message)]
 
         # Site density
@@ -83,10 +132,40 @@ class Model:
         self.site_size = np.array([s.size for s in self.surf.species()])
         self.surf_kin_idx = np.array([self.surf.kinetics_species_index(n) for n in self.surf.species_names])
         self.probe_kin_idx = self.surf.kinetics_species_index(self.probe_gas)
-        with open(cfg.mechanism, 'rb') as f:
-            self.mechanism_sha256 = hashlib.sha256(f.read()).hexdigest()
 
     # ----------------------------------------------------------------------------------
+    def _load_mechanism(self):
+        """Load the gas and surface phases and return the file they came from: the mechanism,
+        or, if Cantera refuses it only for duplicate flags without a duplicate, a copy without
+        those flags in the output folder (reused while the mechanism is unchanged)."""
+        cfg = self.cfg
+        stem = os.path.splitext(os.path.basename(cfg.mechanism))[0]
+        fixed = os.path.join(cfg.output_dir, f'{stem}.duplicates_fixed.yaml')
+        header = ''
+        if os.path.exists(fixed):
+            with open(fixed) as f:
+                header = f.readline()
+        if self.mechanism_sha256 not in header:
+            try:
+                self._load_phases(cfg.mechanism)
+                return cfg.mechanism
+            except ct.CanteraError as e:
+                if UNMATCHED_DUPLICATE not in str(e):
+                    raise
+            os.makedirs(cfg.output_dir, exist_ok=True)
+            remove_unmatched_duplicates(cfg.mechanism, fixed)
+            with open(fixed) as f:
+                header = f.readline()
+        self._load_phases(fixed)
+        n = re.search(r'of (\d+) reactions', header).group(1)
+        self.warnings.append(f'{n} reactions in {os.path.basename(cfg.mechanism)} are marked duplicate but have '
+                             f'no duplicate; loaded {fixed}, the same mechanism without those flags (rates unchanged)')
+        return fixed
+
+    def _load_phases(self, path):
+        self.gas = ct.Solution(path, self.cfg.gas_phase, transport_model=None)
+        self.surf = ct.Interface(path, self.cfg.surface_phase, [self.gas])
+
     def _resolve_gas(self, label, spec):
         if isinstance(spec, str):
             if spec not in self.gas.species_names:
@@ -110,7 +189,7 @@ class Model:
           h_shifts:    {surface species: J/kmol} (enthalpy shift; NASA7 thermo only)"""
         with warnings.catch_warnings():
             warnings.simplefilter('ignore')
-            surf = ct.Interface(self.cfg.mechanism, self.cfg.surface_phase, [self.gas])
+            surf = ct.Interface(self.mechanism_file, self.cfg.surface_phase, [self.gas])
         for name, dh in (h_shifts or {}).items():
             k = surf.species_index(name)
             sp = surf.species(k)

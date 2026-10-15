@@ -77,12 +77,9 @@ def run(ctx):
         data = cov.xs(basis, level='basis')
         named, colors[basis] = species_palette(data, ctx.model.site, s)      # one palette for both series
         for series in C.SERIES:
-            fig = plot_surface_composition(ctx, data, series, named, colors[basis], basis)
-            if fig is None:
-                continue
             stem = 'surface_composition' + ('' if basis == 'fixed_probe' else '_' + basis)
-            P.save(fig, ctx.path(common.series_file(stem, series)), ctx.cfg)
-            plt.close(fig)
+            P.save_parts(plot_surface_composition(ctx, data, series, named, colors[basis], basis),
+                         ctx.path(common.series_file(stem, series)), ctx.cfg)
     ctx.outputs['composition'] = {'coverages': cov, 'on_surface': on_surface,
                                   'colors': colors.get('fixed_probe', {})}
     return ctx.outputs['composition']
@@ -90,54 +87,64 @@ def run(ctx):
 
 def plot_surface_composition(ctx, data, series, named, colors, basis='fixed_probe'):
     """Stacked bars per case, one panel per point of the series (temperature series: a panel
-    per T; pressure series: a row per pressure-series temperature, a panel per P)."""
+    per T; pressure series: a row per pressure-series temperature, a panel per P). A group of
+    more than four points wraps at three per row. Returns the figures (P.MAX_PANELS each)."""
     model = ctx.model
     site = model.site
     flat = data.reset_index()
     groups = common.series_groups(flat, series)
     if not groups:
-        return None
+        return []
     order = C.case_labels(ctx.cfg)
     ncol = max(g[1][g[2]].nunique() for g in groups)
-    fig, axes = plt.subplots(len(groups), ncol, figsize=(4.2 * ncol, 4.6 * len(groups)), sharey=True, squeeze=False)
-    for row_axes, (title, gdf, vary, label_of) in zip(axes, groups):
+    ncol = ncol if ncol <= P.MAX_COLS else 3
+    rows_of_panels = []                                   # each row: points of one group
+    for title, gdf, vary, label_of in groups:
         values = sorted(gdf[vary].unique())
-        for ax, v in zip(row_axes, values):
-            rows = gdf[gdf[vary] == v].set_index('case')
-            part = rows.reindex([c for c in order if c in rows.index])[data.columns]
-            x = np.arange(len(part))
-            bottom = np.zeros(len(part))
-            empty = part[site] if site in part else pd.Series(0.0, index=part.index)
-            segments = ([(empty, P.EMPTY_COLOR, 'empty site')]
-                        + [(part[n], colors[n], species_label(model, n)) for n in named if n in part]
-                        + [(part.drop(columns=[site] + named, errors='ignore').sum(axis=1), P.OTHER_COLOR, 'other')])
-            for values_, color, label in segments:
-                ax.bar(x, values_, bottom=bottom, width=0.72, color=color, label=label, edgecolor='white',
-                       linewidth=1.0)
-                bottom += values_.to_numpy()
-            ax.set_xticks(x, list(part.index), rotation=35, ha='right', fontsize=9)
-            ax.set_ylim(0, 1.0)
-            T = rows['T_K'].iloc[0]
-            Pb = rows['P_ref_bar'].iloc[0]
-            P.style_axis(ax)
-            P.keep_title(ax, f'{T:.0f} K, {Pb:g} bar')
-        for ax in row_axes[len(values):]:
-            ax.set_visible(False)
-        row_axes[0].set_ylabel('Fraction of surface sites', fontsize=10, color=P.INK)
+        rows_of_panels += [[gdf[gdf[vary] == v] for v in values[i:i + ncol]] for i in range(0, len(values), ncol)]
     handles = ([plt.Rectangle((0, 0), 1, 1, color=P.EMPTY_COLOR)] + [plt.Rectangle((0, 0), 1, 1, color=colors[n])
                for n in named] + [plt.Rectangle((0, 0), 1, 1, color=P.OTHER_COLOR)])
     labels = ['empty site'] + [species_label(model, n) for n in named] + ['other']
-    fig.legend(handles[::-1], labels[::-1], loc='center left', bbox_to_anchor=(1.0, 0.5),
-               frameon=False, fontsize=9, title='Surface species', title_fontsize=9)
-    fig.suptitle(f'What covers the surface at steady state ({basis}, {series} series)', x=0.01, ha='left', fontsize=11)
-    fig.tight_layout()
-    return fig
+    figs = []
+    for page in P.pages(rows_of_panels, P.rows_per_page(ncol)):
+        fig, axes = plt.subplots(len(page), ncol, figsize=(4.2 * ncol, 4.6 * len(page)), sharey=True, squeeze=False)
+        for row_axes, panels in zip(axes, page):
+            for ax, point_rows in zip(row_axes, panels):
+                rows = point_rows.set_index('case')
+                part = rows.reindex([c for c in order if c in rows.index])[data.columns]
+                x = np.arange(len(part))
+                bottom = np.zeros(len(part))
+                empty = part[site] if site in part else pd.Series(0.0, index=part.index)
+                segments = ([(empty, P.EMPTY_COLOR, 'empty site')]
+                            + [(part[n], colors[n], species_label(model, n)) for n in named if n in part]
+                            + [(part.drop(columns=[site] + named, errors='ignore').sum(axis=1), P.OTHER_COLOR, 'other')])
+                for values_, color, label in segments:
+                    ax.bar(x, values_, bottom=bottom, width=0.72, color=color, label=label, edgecolor='white',
+                           linewidth=1.0)
+                    bottom += values_.to_numpy()
+                ax.set_xticks(x, list(part.index), rotation=35, ha='right', fontsize=9)
+                ax.set_ylim(0, 1.0)
+                T = rows['T_K'].iloc[0]
+                Pb = rows['P_ref_bar'].iloc[0]
+                P.style_axis(ax)
+                P.keep_title(ax, f'{T:.0f} K, {Pb:g} bar')
+            for ax in row_axes[len(panels):]:
+                ax.set_visible(False)
+            row_axes[0].set_ylabel('Fraction of surface sites', fontsize=10, color=P.INK)
+        fig.legend(handles[::-1], labels[::-1], loc='center left', bbox_to_anchor=(1.0, 0.5),
+                   frameon=False, fontsize=9, title='Surface species', title_fontsize=9)
+        fig.suptitle(f'What covers the surface at steady state ({basis}, {series} series)', x=0.01, ha='left',
+                     fontsize=11)
+        fig.tight_layout()
+        figs.append(fig)
+    return figs
 
 
 def plot_coverage_bars(ctx, cov, cases, xs, xlabel, title, log_x=False):
     """Stacked coverages against one varied quantity: one bar per solved x (cov indexed by
     (case, x)), one panel per case. Species keep the colors of the surface-composition figure
-    where it ran in this session. log_x: bars evenly spaced in log10(x) (pressures)."""
+    where it ran in this session. log_x: bars evenly spaced in log10(x) (pressures).
+    Returns the figures (at most 3 x 3 panels each)."""
     model, s = ctx.model, ctx.cfg.composition
     site = model.site
     base = ctx.outputs.get('composition', {}).get('colors')
@@ -146,11 +153,17 @@ def plot_coverage_bars(ctx, cov, cases, xs, xlabel, title, log_x=False):
     pos = (lambda x: np.log10(np.asarray(x, dtype=float))) if log_x else (lambda x: np.asarray(x, dtype=float))
     steps = np.diff(pos(xs))
     width = 0.8 * (np.min(steps) if len(steps) else (0.5 if log_x else 50.0))
+    layer_names = [site] + named + ['other']
+    color_of = lambda n: colors.get(n, P.EMPTY_COLOR if n == site else P.OTHER_COLOR)   # noqa: E731
+    return [_coverage_bars_page(ctx, cov, page, xs, xlabel, title, pos, width, log_x, named, layer_names, color_of)
+            for page in P.pages(cases, 3 * P.rows_per_page(3))]
+
+
+def _coverage_bars_page(ctx, cov, cases, xs, xlabel, title, pos, width, log_x, named, layer_names, color_of):
+    model, site = ctx.model, ctx.model.site
     ncol = min(3, len(cases))
     nrow = int(np.ceil(len(cases) / ncol))
     fig, axes = plt.subplots(nrow, ncol, figsize=(4.4 * ncol, 3.3 * nrow), sharex=True, sharey=True, squeeze=False)
-    layer_names = [site] + named + ['other']
-    color_of = lambda n: colors.get(n, P.EMPTY_COLOR if n == site else P.OTHER_COLOR)   # noqa: E731
     for ax, case in zip(axes.flat, cases):
         part = cov.xs(case, level='case')
         part = part[part.index.isin(xs)].sort_index()                 # solved values only: gaps elsewhere

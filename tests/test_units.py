@@ -95,6 +95,26 @@ def test_unknown_role_species(tmp_path):
         hsk.Model(hsk.load_config(write_settings(tmp_path, TOY_SETTINGS, "probe_adsorbate = 'B(s)'\n")))
 
 
+def test_duplicate_flag_without_duplicate(tmp_path):
+    from conftest import TOY
+    text = open(TOY).read()
+    text = text.replace('# R3, impurity spreads onto a second site\n',
+                        '# R3, impurity spreads onto a second site\n  duplicate: true\n')       # no partner
+    r4 = '  rate-constant: {A: 4.0e+21, b: 0.0, Ea: 85.0}\n'
+    text = text.replace(r4, '  duplicate: true\n' + r4 + '- equation: AI + 2 S <=> A(s) + I(s)\n  duplicate: true\n'
+                        '  rate-constant: {A: 1.0e+20, b: 0.0, Ea: 120.0}\n')                 # a real pair (one reversed)
+    (tmp_path / 'mech.yaml').write_text(text)
+    cfg = hsk.load_config(write_settings(tmp_path, TOY_SETTINGS, "mechanism = 'mech.yaml'\n"))
+    m = hsk.Model(cfg)
+    fixed = tmp_path / 'output' / 'mech.duplicates_fixed.yaml'
+    assert m.mechanism_file == str(fixed) and m.surf.n_reactions == 5
+    assert fixed.read_text().count('duplicate: true') == 2                                    # only R3's flag removed
+    assert any('1 reactions in mech.yaml' in w for w in m.warnings)
+    assert m.new_surface().n_reactions == 5
+    mtime = fixed.stat().st_mtime_ns
+    assert hsk.Model(cfg).mechanism_file == str(fixed) and fixed.stat().st_mtime_ns == mtime  # reused
+
+
 def test_unknown_section_key(tmp_path):
     with pytest.raises(hsk.ConfigError, match="unknown 'curves' settings"):
         hsk.load_config(write_settings(tmp_path, TOY_SETTINGS, "curves = {'ratio': [0.1]}\n"))
@@ -114,6 +134,16 @@ def test_publication_size_and_cap():
     P.apply_style(tall, 'publication', 17.8)
     assert tall.get_size_inches()[1] == pytest.approx(P.PUB_MAX_HEIGHT_CM / 2.54)
     plt.close('all')
+
+
+def test_panel_letters_past_z(tmp_path):
+    assert [P.panel_letter(i) for i in (0, 25, 26, 27, 52)] == ['a', 'z', 'aa', 'ab', 'ba']
+    fig, axes = plt.subplots(6, 5)
+    for ax in axes.flat:
+        ax.set_title('CO, 650 K, 1 bar', loc='left')
+    P.save(fig, str(tmp_path / 'many.png'), style='publication')         # 30 panels: past (z)
+    assert axes[-1][-1].get_title(loc='left').startswith(r'$\bf{(ad)}$')
+    plt.close(fig)
 
 
 def test_save_writes_pdf_in_publication(tmp_path):

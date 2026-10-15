@@ -52,12 +52,27 @@ def test_files_written(ctx):
              'sensitivity.csv', 'poisoning_over_time.csv', 'binding_check.pdf', 'sweep_coverages.pdf',
              'poisoning_tolerance.csv', 'pressure_sweep.pdf', 'pressure_sweep.csv', 'half_rate_pressure.csv',
              'pressure_sweep_coverages_500K.pdf', 'convergence.pdf', 'convergence.csv', 'site_blocking.pdf',
-             'rate_control_500K_0.3bar.pdf', 'rate_control_500K_1bar.pdf', 'rate_control_500K_3bar.pdf']
-    for stem in ('rates_summary', 'surface_composition', 'poisoning_curves', 'poisoning_over_time'):
+             'rate_control_500K_0.3bar.pdf', 'rate_control_500K_1bar.pdf', 'rate_control_500K_3bar.pdf',
+             'poisoning_over_time_500K_1bar.pdf',          # temperature series: one point, one per point
+             'poisoning_over_time_I_vs_P.pdf']             # pressure series: more points than impurities
+    for stem in ('rates_summary', 'surface_composition', 'poisoning_curves', 'reaction_orders'):
         names += [f'{stem}_vs_T.pdf', f'{stem}_vs_P.pdf']                # one figure per series
     for name in names:
         assert os.path.exists(os.path.join(out, name)), name
     assert os.listdir(os.path.join(out, 'reaction_paths'))
+
+
+def test_figures_split_at_nine_panels(tmp_path):
+    import matplotlib.pyplot as plt
+    from hydrogen_surface_kinetics import plotting as P
+    assert [len(p) for p in P.pages(range(9), 4)] == [3, 3, 3] and P.pages([], 4) == []
+    assert [P.grid_shape(n) for n in (3, 5, 7, 9)] == [(1, 3), (2, 3), (2, 4), (3, 3)]
+    assert P.rows_per_page(3) == 3 and P.rows_per_page(4) == 2
+    path = str(tmp_path / 'f.png')
+    P.save_parts([plt.figure(), plt.figure()], path, style='screen')
+    assert sorted(os.listdir(tmp_path)) == ['f_1.png', 'f_2.png']
+    P.save_parts([plt.figure()], path, style='screen')                  # fewer parts: old parts removed
+    assert sorted(os.listdir(tmp_path)) == ['f.png']
 
 
 def test_curves_monotonic(ctx):

@@ -64,32 +64,30 @@ def run(ctx):
         ctx.log('  needs attention:\n' + bad[['T_K', 'P_ref_bar', 'case', 'ratio', 'converged', 'starts_agree']]
                 .to_string(index=False))
     for series in C.SERIES:
-        fig = plot_poisoning_curves(ctx, df, tol, series)
-        if fig is not None:
-            P.save(fig, ctx.path(common.series_file('poisoning_curves', series)), cfg)
-            plt.close(fig)
-    fig = plot_site_blocking(ctx, df)
-    if fig is not None:
-        P.save(fig, ctx.path('site_blocking.png'), cfg)
-        plt.close(fig)
+        P.save_parts(plot_poisoning_curves(ctx, df, tol, series),
+                     ctx.path(common.series_file('poisoning_curves', series)), cfg)
+    P.save_parts(plot_site_blocking(ctx, df), ctx.path('site_blocking.png'), cfg)
     ctx.outputs['curves'] = {'results': results, 'curves': df, 'tolerance': tol}
     return ctx.outputs['curves']
 
 
 def plot_poisoning_curves(ctx, curves, tolerance=None, series='temperature'):
-    """One row per point of the series: rate relative to the reference, and the sites the
-    impurity takes, against the impurity level."""
+    """One column per point of the series, at most P.MAX_COLS per figure: the rate relative
+    to the reference (top) and the sites the impurity takes (bottom), against the impurity
+    level. Returns the figures."""
+    sub = C.in_series(curves, series)
+    pts = list(sub[['T_K', 'P_ref_bar']].drop_duplicates().sort_values(['T_K', 'P_ref_bar']).itertuples(index=False))
+    return [_poisoning_curves_page(ctx, sub, tolerance, page) for page in P.pages(pts, P.MAX_COLS)]
+
+
+def _poisoning_curves_page(ctx, sub, tolerance, pts):
     cfg = ctx.cfg
     probe = probe_label(ctx.model)
     imps = common.impurity_labels(ctx, 'curves')
     colors = P.colors_for(imps)
-    sub = C.in_series(curves, series)
-    pts = sub[['T_K', 'P_ref_bar']].drop_duplicates().sort_values(['T_K', 'P_ref_bar']).itertuples(index=False)
-    pts = list(pts)
-    if not pts:
-        return None
-    fig, axes = plt.subplots(len(pts), 2, figsize=(11, 3.9 * len(pts)), squeeze=False)
-    for row, (T, Pb) in zip(axes, pts):
+    fig, axes = plt.subplots(2, len(pts), figsize=(3.6 * len(pts) + 1.2, 7.4), squeeze=False, sharex=True)
+    for j, (T, Pb) in enumerate(pts):
+        row = (axes[0][j], axes[1][j])                    # this point's column: rate, then sites
         part = sub[(sub['T_K'] == T) & (sub['P_ref_bar'] == Pb) & (sub['case'] != cfg.reference_label)]
         for imp in imps:
             d = part[(part['case'] == imp) & part['converged'].astype(bool)].sort_values('ratio')
@@ -114,15 +112,17 @@ def plot_poisoning_curves(ctx, curves, tolerance=None, series='temperature'):
                 if len(t) and np.isfinite(t['ratio_at_half_rate'].iloc[0]):
                     row[0].plot(t['ratio_at_half_rate'].iloc[0], 0.5, **P.HALF_MARK, mec=colors[imp])
         row[0].axhline(0.5, color=P.MUTED, lw=1, ls='--')
-        row[0].text(min(cfg.curves['ratios']), 0.45, 'rate halved', color=P.MUTED, fontsize=8, ha='left', va='top')
-        name = f'{T:.0f} K, {Pb:g} bar'
-        P.style_axis(row[0], f'{name}: forward {probe} dissociation rate', f'poisoning factor  TOF / TOF({cfg.reference_label})')
-        P.style_axis(row[1], f'{name}: sites taken by the impurity', f'fraction of sites (not empty, {probe} or its adsorbates)')
+        P.style_axis(row[0], f'{T:.0f} K, {Pb:g} bar',
+                     f'poisoning factor  TOF / TOF({cfg.reference_label})' if j == 0 else '')
+        P.style_axis(row[1], '', 'impurity-held sites' if j == 0 else '')
         for ax in row:
             ax.set_xscale('log')
             ax.set_yscale('log')
-            ax.set_xlabel(f'impurity level  p(impurity) / p({probe})')
-    handles, labels = axes[0][0].get_legend_handles_labels()
+        row[1].set_xlabel(f'p(impurity) / p({probe})')
+    shown = [imp for imp in imps if (sub['case'] == imp).any()]
+    handles = [plt.Line2D([], [], color=colors[imp], marker='o', ms=4.5, lw=1.6) for imp in shown]
+    handles.append(plt.Line2D([], [], color=P.MUTED, lw=1, ls='--'))
+    labels = list(shown) + ['rate halved']
     if tolerance is not None and (tolerance['note'].fillna('') == '').any():
         handles.append(P.half_mark_handle('half-rate level'))
         labels.append('half-rate level')
@@ -132,8 +132,11 @@ def plot_poisoning_curves(ctx, curves, tolerance=None, series='temperature'):
     if 'poisoning_factor_B' in sub and (disagree & sub['poisoning_factor_B'].notna()).any():
         handles.append(plt.Line2D([], [], ls='--', color=P.INK, marker='s', ms=4.5, mfc='white'))
         labels.append('covered start (start B)')
-    fig.legend(handles, labels, loc='upper center', bbox_to_anchor=(0.5, 1.03), ncol=len(labels), frameon=False, fontsize=9)
-    fig.tight_layout(rect=(0, 0, 1, 0.96))
+    fig.legend(handles, labels, loc='upper center', bbox_to_anchor=(0.5, 1.0), ncol=min(len(labels), 5),
+               frameon=False, fontsize=9)
+    fig.suptitle(f'Poisoning curves: forward {probe} dissociation rate (top) and impurity-held sites (bottom)',
+                 x=0.01, y=0.9, ha='left', fontsize=11)
+    fig.tight_layout(rect=(0, 0, 1, 0.86))
     return fig
 
 
@@ -153,11 +156,14 @@ def blocking_rows(ctx, curves):
 def plot_site_blocking(ctx, curves):
     """Stage 7 on real data, one row per impurity at one point: (a) empty sites and sites the
     impurity takes, (b) the site-count factor f, (c) the poisoning factor from rates (markers)
-    against the full site-blocking prediction (line) and the coverage-only one (dashed)."""
-    probe = probe_label(ctx.model)
+    against the full site-blocking prediction (line) and the coverage-only one (dashed).
+    Returns the figures (at most three rows each)."""
     pt, at, shown = blocking_rows(ctx, curves)
-    if not shown:
-        return None
+    return [_site_blocking_page(ctx, pt, at, page) for page in P.pages(shown, P.rows_per_page(3))]
+
+
+def _site_blocking_page(ctx, pt, at, shown):
+    probe = probe_label(ctx.model)
     colors = P.colors_for(common.impurity_labels(ctx, 'curves'))
     fig, axes = plt.subplots(len(shown), 3, figsize=(13, 3.2 * len(shown)), squeeze=False)
     for row, imp in zip(axes, shown):
