@@ -78,9 +78,7 @@ def run(ctx):
     P.save(fig, ctx.path('temperature_sweep.png'), cfg)
     plt.close(fig)
     cov = coverage_table(ctx, results).droplevel(['basis', 'series', 'P_ref_bar'])
-    fig = plot_sweep_coverages(ctx, cov)
-    P.save(fig, ctx.path('sweep_coverages.png'), cfg)
-    plt.close(fig)
+    P.save_parts(plot_sweep_coverages(ctx, cov), ctx.path('sweep_coverages.png'), cfg)
     ctx.outputs['sweep'] = {'results': results, 'sweep': df, 'release': rel, 'coverages': cov}
     return ctx.outputs['sweep']
 
@@ -131,7 +129,7 @@ def plot_temperature_sweep(ctx, sweep, release=None):
 
 def plot_sweep_coverages(ctx, cov):
     """Stacked coverages against temperature, one bar per solved temperature and one panel per
-    case (temperatures without a converged steady state are gaps)."""
+    case (temperatures without a converged steady state are gaps). Returns the figures."""
     cases = [c for c in common.sweep_cases(ctx, 'sweep') if c in set(cov.index.get_level_values('case'))]
     return plot_coverage_bars(ctx, cov, cases, sweep_temperatures(ctx), 'T (K)',
                               'What covers the surface against temperature')

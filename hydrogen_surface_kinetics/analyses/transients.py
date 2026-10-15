@@ -3,9 +3,12 @@
 At every point of the temperature and pressure series: start from the steady state in the
 probe gas alone (a working catalyst), switch the gas to probe + impurity at t = 0, and
 follow the forward rate as the impurity builds up.
-Outputs: poisoning_over_time.csv, poisoning_over_time_trajectories.csv,
-poisoning_over_time_vs_T.png and, with a pressure series, poisoning_over_time_vs_P.png.
+Outputs: poisoning_over_time.csv, poisoning_over_time_trajectories.csv, and figures
+poisoning_over_time_<T>K_<P>bar.png (one per point; or poisoning_over_time_<impurity>_vs_T/_vs_P.png,
+one per impurity, when a series has more points than impurities).
 """
+import re
+
 import cantera as ct
 import matplotlib.pyplot as plt
 import numpy as np
@@ -138,56 +141,66 @@ def run(ctx):
     ctx.log(summary.drop(columns=['top_species_end'], errors='ignore')
             .to_string(index=False, float_format=lambda v: f'{v:.3g}'))
     if trajs:
+        drawn = set()
         for series in C.SERIES:
-            fig = plot_poisoning_over_time(ctx, jobs, res_all, series)
-            if fig is not None:
-                P.save(fig, ctx.path(common.series_file('poisoning_over_time', series)), cfg)
-                plt.close(fig)
+            for stem, figs in plot_poisoning_over_time(ctx, jobs, res_all, series, skip=drawn):
+                P.save_parts(figs, ctx.path(f'{stem}.png'), cfg)
+                drawn.add(stem)
     ctx.outputs['transients'] = {'results': res_all, 'summary': summary}
     return ctx.outputs['transients']
 
 
-def plot_poisoning_over_time(ctx, jobs, results, series='temperature'):
-    """Two rows (rate, impurity coverage) and one column per (point, impurity): points down and
-    impurities across, or the other way round when there are more points than impurities."""
+def plot_poisoning_over_time(ctx, jobs, results, series='temperature', skip=()):
+    """The figures of one series as [(file stem, figures)]: one per point with the impurities
+    across, or one per impurity with the points across when the series has more points than
+    impurities. Each column (at most P.MAX_COLS per figure) is one (point, impurity): the rate
+    relative to t = 0 (top) and the sites the impurity takes (bottom). Stems in `skip` (points
+    of both series, already drawn) are left out."""
+    mine = [j for j in jobs if j['_labels']['series'] in (series, 'both')]
+    pts = sorted({(j['row']['T_K'], j['_labels']['P_ref_bar']) for j in mine})
+    imps = [i for i in common.impurity_labels(ctx, 'transients') if any(j['row']['case'] == i for j in mine)]
+    if not pts or not imps:
+        return []
+    if len(imps) >= len(pts):
+        groups = [(f'poisoning_over_time_{T:.0f}K_{Pb:g}bar', [(T, Pb, imp) for imp in imps]) for T, Pb in pts]
+    else:
+        slug = lambda text: re.sub(r'[^A-Za-z0-9.+-]+', '_', text).strip('_')     # noqa: E731
+        groups = [(f'poisoning_over_time_{slug(imp)}_{common.SERIES_SUFFIX[series]}', [(T, Pb, imp) for T, Pb in pts])
+                  for imp in imps]
+    return [(stem, [_poisoning_over_time_page(ctx, mine, results, page) for page in P.pages(panels, P.MAX_COLS)])
+            for stem, panels in groups if stem not in skip]
+
+
+def _poisoning_over_time_page(ctx, jobs, results, panels):
     s = ctx.cfg.transients
     probe = probe_label(ctx.model)
     shades = ['#9ec5f4', '#5598e7', '#256abf', '#0d366b', '#061b36']        # light -> dark = more impurity
     ratio_colors = dict(zip(sorted(s['ratios']), shades if len(s['ratios']) <= len(shades) else P.SERIES_COLORS))
-    mine = [j for j in jobs if j['_labels']['series'] in (series, 'both')]
-    pts = sorted({(j['row']['T_K'], j['_labels']['P_ref_bar']) for j in mine})
-    if not pts:
-        return None
-    imps = [i for i in common.impurity_labels(ctx, 'transients') if any(j['row']['case'] == i for j in mine)]
-    by_point = len(imps) >= len(pts)          # the longer of points / impurities runs across the columns
-    pairs, ncol = (len(pts), len(imps)) if by_point else (len(imps), len(pts))
-    fig, axes = plt.subplots(2 * pairs, ncol, figsize=(3.4 * ncol, 5.6 * pairs), squeeze=False, sharex=True)
-    for pi, (T, Pb) in enumerate(pts):
-        for ii, imp in enumerate(imps):
-            r_, c_ = (pi, ii) if by_point else (ii, pi)
-            ax_r, ax_c = axes[2 * r_][c_], axes[2 * r_ + 1][c_]
-            for job in mine:
-                r = job['row']
-                if r['T_K'] != T or job['_labels']['P_ref_bar'] != Pb or r['case'] != imp:
-                    continue
-                res = results[job['key']]
-                traj = res.get('trajectory')
-                if traj is None or not len(traj):
-                    continue
-                c = ratio_colors.get(r['ratio'], P.INK)
-                ax_r.plot(traj['t_s'], traj['tof_fwd'] / res['tof0'], color=c, lw=1.8, label=f"{r['ratio']:g}")
-                ax_c.plot(traj['t_s'], P.log_floor(traj['theta_impurity']), color=c, lw=1.8)
-            ax_r.axhline(0.5, color=P.MUTED, lw=0.8, ls='--')
-            for ax in (ax_r, ax_c):
-                ax.set_xscale('log')
-                ax.set_yscale('log')
-            lo, hi = ax_r.get_ylim()
-            ax_r.set_ylim(min(lo, 0.1), max(hi, 2.0))      # at least a decade: whole-decade ticks only
-            P.style_axis(ax_r, f'{imp}, {T:.0f} K, {Pb:g} bar', 'TOF / TOF(t=0)' if c_ == 0 else '')
-            P.style_axis(ax_c, '', 'sites taken by impurity' if c_ == 0 else '')
-    fig.supxlabel('time after the impurity arrives (s)', fontsize=10, color=P.INK)
-    handles, labels = axes[0][0].get_legend_handles_labels()
-    fig.legend(handles, labels, title=f'p(impurity) / p({probe})', loc='upper center', bbox_to_anchor=(0.5, 1.03),
-               ncol=max(1, len(labels)), frameon=False, fontsize=9, title_fontsize=9)
-    fig.tight_layout(rect=(0, 0, 1, 0.95))
+    fig, axes = plt.subplots(2, len(panels), figsize=(3.4 * len(panels) + 1.0, 5.8), squeeze=False, sharex=True)
+    for c_, (T, Pb, imp) in enumerate(panels):
+        ax_r, ax_c = axes[0][c_], axes[1][c_]
+        for job in jobs:
+            r = job['row']
+            if r['T_K'] != T or job['_labels']['P_ref_bar'] != Pb or r['case'] != imp:
+                continue
+            res = results[job['key']]
+            traj = res.get('trajectory')
+            if traj is None or not len(traj):
+                continue
+            c = ratio_colors.get(r['ratio'], P.INK)
+            ax_r.plot(traj['t_s'], traj['tof_fwd'] / res['tof0'], color=c, lw=1.8)
+            ax_c.plot(traj['t_s'], P.log_floor(traj['theta_impurity']), color=c, lw=1.8)
+        ax_r.axhline(0.5, color=P.MUTED, lw=0.8, ls='--')
+        for ax in (ax_r, ax_c):
+            ax.set_xscale('log')
+            ax.set_yscale('log')
+        lo, hi = ax_r.get_ylim()
+        ax_r.set_ylim(min(lo, 0.1), max(hi, 2.0))      # at least a decade: whole-decade ticks only
+        P.style_axis(ax_r, f'{imp}, {T:.0f} K, {Pb:g} bar', 'TOF / TOF(t=0)' if c_ == 0 else '')
+        P.style_axis(ax_c, '', 'sites taken by impurity' if c_ == 0 else '')
+        ax_c.set_xlabel('time after the impurity arrives (s)')
+    handles = [plt.Line2D([], [], color=c, lw=1.8) for c in ratio_colors.values()]
+    fig.legend(handles, [f'{r:g}' for r in ratio_colors], title=f'p(impurity) / p({probe})', loc='upper center',
+               bbox_to_anchor=(0.5, 1.03), ncol=len(handles), frameon=False, fontsize=9, title_fontsize=9)
+    fig.tight_layout(rect=(0, 0, 1, 0.92))
     return fig

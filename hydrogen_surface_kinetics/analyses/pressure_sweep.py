@@ -101,32 +101,34 @@ def run(ctx):
     if len(bad):
         ctx.log('  needs attention:\n' + bad[['T_K', 'P_ref_bar', 'case', 'converged', 'starts_agree']]
                 .to_string(index=False))
-    fig = plot_pressure_sweep(ctx, df, half)
-    P.save(fig, ctx.path('pressure_sweep.png'), cfg)
-    plt.close(fig)
+    P.save_parts(plot_pressure_sweep(ctx, df, half), ctx.path('pressure_sweep.png'), cfg)
     cov = coverage_table(ctx, results).droplevel(['basis', 'series'])
     cases = [c for c in common.sweep_cases(ctx, 'pressure_sweep') if c in set(cov.index.get_level_values('case'))]
     for T in sweep_temperatures(ctx):
         part = cov[cov.index.get_level_values('T_K') == T].droplevel('T_K')
         if part.empty:
             continue
-        fig = plot_coverage_bars(ctx, part, cases, [p / 1e5 for p in sweep_pressures(ctx)],
-                                 f'p({probe_label(ctx.model)}) (bar)',
-                                 f'What covers the surface against pressure, {T:.0f} K', log_x=True)
-        P.save(fig, ctx.path(f'pressure_sweep_coverages_{T:.0f}K.png'), cfg)
-        plt.close(fig)
+        figs = plot_coverage_bars(ctx, part, cases, [p / 1e5 for p in sweep_pressures(ctx)],
+                                  f'p({probe_label(ctx.model)}) (bar)',
+                                  f'What covers the surface against pressure, {T:.0f} K', log_x=True)
+        P.save_parts(figs, ctx.path(f'pressure_sweep_coverages_{T:.0f}K.png'), cfg)
     ctx.outputs['pressure_sweep'] = {'results': results, 'sweep': df, 'half_rate': half, 'coverages': cov}
     return ctx.outputs['pressure_sweep']
 
 
 def plot_pressure_sweep(ctx, sweep, half=None):
     """One row per temperature: (a) forward TOF against p (log-log), (b) local slope,
-    (c) poisoning factor with the half-rate pressures."""
+    (c) poisoning factor with the half-rate pressures. Returns the figures (at most three
+    rows each)."""
+    return [_pressure_sweep_page(ctx, sweep, half, temps)
+            for temps in P.pages(sorted(sweep['T_K'].unique()), P.rows_per_page(3))]
+
+
+def _pressure_sweep_page(ctx, sweep, half, temps):
     cfg = ctx.cfg
     probe = probe_label(ctx.model)
     cases = common.sweep_cases(ctx, 'pressure_sweep')
     colors = P.colors_for(cases, first=cfg.reference_label)
-    temps = sorted(sweep['T_K'].unique())
     fig, axes = plt.subplots(len(temps), 3, figsize=(15, 4.4 * len(temps)), squeeze=False)
     for row, T in zip(axes, temps):
         for case in cases:
