@@ -66,6 +66,8 @@ def counts(ctx, names):
         n_pts = len(pressure_sweep.sweep_pressures(ctx)) * len(pressure_sweep.sweep_temperatures(ctx))
         add('pressure_sweep', n_pts, *_exact(ctx, pressure_sweep.sweep_conditions(ctx)),
             'pressure only, at pressure_temperatures')
+    if 'equilibrium' in names:
+        add('equilibrium', 0, 0, 0, 'no solving: equilibrium coverage from the mechanism thermochemistry')
     if 'convergence' in names:
         conds = cfg.convergence['conditions']
         n = len(conds) if conds else f"<= {cfg.convergence['max_conditions']}"

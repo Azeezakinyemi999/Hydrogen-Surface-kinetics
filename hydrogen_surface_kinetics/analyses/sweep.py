@@ -1,7 +1,8 @@
 """Temperature sweep: Arrhenius plot, apparent activation energy, release temperature
 (documentation: Stage 11.2). Always at reference_pressure: it is the fine-grained
 temperature series (pressure_sweep is its pressure counterpart). Outputs: temperature_sweep.csv, release_temperature.csv,
-temperature_sweep.png, and sweep_coverages.png (what covers the surface against T).
+temperature_sweep.png and temperature_sweep_per_area.png (Format 2: panel (a) per area), and
+sweep_coverages.png (what covers the surface against T).
 """
 import cantera as ct
 import matplotlib.pyplot as plt
@@ -9,6 +10,7 @@ import numpy as np
 import pandas as pd
 
 from .. import conditions as C
+from .. import per_area as PA
 from .. import plotting as P
 from ..labels import probe_label, species_label
 from . import common
@@ -74,17 +76,21 @@ def run(ctx):
     bad = common.problems(df)
     if len(bad):
         ctx.log('  needs attention:\n' + bad[['T_K', 'case', 'converged', 'starts_agree']].to_string(index=False))
-    fig = plot_temperature_sweep(ctx, df, rel)
-    P.save(fig, ctx.path('temperature_sweep.png'), cfg)
-    plt.close(fig)
+    for stem, area in (('temperature_sweep', False), ('temperature_sweep_per_area', True)):
+        fig = plot_temperature_sweep(ctx, df, rel, per_area=area)
+        P.save(fig, ctx.path(f'{stem}.png'), cfg)
+        plt.close(fig)
     cov = coverage_table(ctx, results).droplevel(['basis', 'series', 'P_ref_bar'])
     P.save_parts(plot_sweep_coverages(ctx, cov), ctx.path('sweep_coverages.png'), cfg)
     ctx.outputs['sweep'] = {'results': results, 'sweep': df, 'release': rel, 'coverages': cov}
     return ctx.outputs['sweep']
 
 
-def plot_temperature_sweep(ctx, sweep, release=None):
+def plot_temperature_sweep(ctx, sweep, release=None, per_area=False):
+    """(a) Arrhenius plot of the forward TOF (per_area: of kd_eff = J_diss / p), (b) local
+    apparent activation energy, (c) poisoning factor against T with release temperatures."""
     cfg = ctx.cfg
+    rate = 'kd_eff_mol_m2_s_Pa' if per_area else 'tof_fwd'
     probe = probe_label(ctx.model)
     cases = common.sweep_cases(ctx, 'sweep')
     colors = P.colors_for(cases, first=cfg.reference_label)
@@ -95,8 +101,8 @@ def plot_temperature_sweep(ctx, sweep, release=None):
             continue
         two = (d['starts_agree'] == False).to_numpy()              # noqa: E712
         style = dict(color=colors[case], ms=4.5, lw=1.6, label=case)
-        axes[0].plot(1000.0 / d['T_K'], d['tof_fwd'], '-o', **style)
-        axes[0].plot(1000.0 / d['T_K'].to_numpy()[two], d['tof_fwd'].to_numpy()[two], 'o', ms=9, mfc='none',
+        axes[0].plot(1000.0 / d['T_K'], d[rate], '-o', **style)
+        axes[0].plot(1000.0 / d['T_K'].to_numpy()[two], d[rate].to_numpy()[two], 'o', ms=9, mfc='none',
                      mec=P.INK, mew=1.2)
         axes[1].plot(d['T_K'], d['E_app_kJ_per_mol'], '-o', **style)
         if case != cfg.reference_label:
@@ -107,7 +113,11 @@ def plot_temperature_sweep(ctx, sweep, release=None):
                     axes[2].plot(r['release_T_K'].iloc[0], 0.5, **P.HALF_MARK, mec=colors[case])
     axes[0].set_yscale('log')
     axes[0].set_xlabel('1000 / T  (1/K)')
-    P.style_axis(axes[0], 'a) Arrhenius plot', f'forward {probe} dissociation TOF (1/s)')
+    if per_area:
+        P.style_axis(axes[0], 'a) Arrhenius plot, per area', PA.axis_label(
+            '$k_{d,\\mathrm{eff}}$', f'mol {P.sub(probe)} m$^{{-2}}$ s$^{{-1}}$ Pa$^{{-1}}$', ctx.model))
+    else:
+        P.style_axis(axes[0], 'a) Arrhenius plot', f'forward {probe} dissociation TOF (1/s)')
     axes[1].axhline(0, color=P.MUTED, lw=0.8)
     axes[1].set_xlabel('T (K)')
     P.style_axis(axes[1], 'b) Local apparent activation energy', '$E_{app}$ (kJ/mol)')

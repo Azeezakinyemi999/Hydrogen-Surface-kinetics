@@ -135,6 +135,10 @@ The step follows a plain mass-action law, so $k_r$ is the same in every case. An
 
 **Counting convention**: fluxes $J$ are in mol of **H₂ molecules**; surface concentrations $C_\mathrm{H}$ are in mol of **H atoms**. This keeps $k_r$ consistent with Cantera. It is also the point on which literature tables are often ambiguous: check whether their concentrations count H or H₂ before comparing, since it changes numbers by a factor of 2 or 4.
 
+![Rates per site and per area](figures/fig_per_area.png)
+
+*Toy model. (a) A temperature sweep per site and (b) the same per area: identical slopes and activation energies, different prefactors and units. (c) Against pressure, $k_{d,\mathrm{eff}} = k_d\,\theta_v^2$ falls as the surface fills; a first-order surface ($J = k_d\,p$) would follow the dashed clean-surface $k_d$.*
+
 ### Two consequences
 
 1. **Converting does not change any activation energy.** $\Gamma/p$ is constant at fixed pressure, so Format-2 Arrhenius fits have the same $E_a$ as Format 1. Only the prefactor $A$ changes, and gets literature units.
@@ -213,6 +217,8 @@ $$K = e^{-\Delta G^\circ/RT} = e^{\Delta S^\circ/R}\;e^{-\Delta H^\circ/RT} .$$
 
 That is why the report fits $K$ in van 't Hoff form and reads off $\Delta H^\circ$ (the adsorption enthalpy, negative) and $\Delta S^\circ$ (negative: the gas loses freedom on adsorbing).
 
+> **Standard pressure.** $K$ here uses $P^\circ$ = 1 bar, but RMG writes its thermochemistry at 1 atm (101 325 Pa). The two are related by $K(1\,\text{bar}) = e^{-\Delta G^\circ/RT}\cdot P^\circ/P_\mathrm{thermo}$: a factor of 0.987, or 0.11 J mol⁻¹ K⁻¹ in $\Delta S^\circ$ for the one gas molecule consumed ($\Delta H^\circ$ does not change). The package converts the thermochemistry to 1 bar, and its check $K$(rates)/$K$(thermochemistry) is 1 for a thermodynamically consistent mechanism.
+
 ### Consequence 1: the isotherm
 
 On a clean surface, with only H adsorbed ($\theta_v = 1-\theta_\mathrm{H}$), equilibrium gives
@@ -236,6 +242,10 @@ $\theta_\mathrm{H} = 0.5$ when $K\,p/P^\circ = 1$, that is when $\Delta S^\circ/
 $$T_{1/2} = \frac{\Delta H^\circ}{\Delta S^\circ + R\ln(p/P^\circ)} .$$
 
 Higher pressure gives a higher $T_{1/2}$: the surface stays covered to a higher temperature. In the toy, $\Delta H^\circ = -77.8$ kJ/mol and $\Delta S^\circ = -139$ J/(mol K), so $T_{1/2} = 560$ K at 1 bar. That fits the toy coverage of $\theta_\mathrm{H} = 0.725$ at 500 K and about 0.53 at 550 K.
+
+![Equilibrium coverage and the equilibrium check](figures/fig_equilibrium.png)
+
+*Toy model. (a) Isotherms of a surface holding only hydrogen (A in the toy), with steady states of the probe gas alone on them. (b) Against temperature at three pressures; diamonds: $T_{1/2}$. (c) The equilibrium check $q$ of Consequence 3 below: 1 for the probe gas alone, slightly below 1 with the impurity.*
 
 ### Consequence 3: with impurities
 
@@ -339,6 +349,10 @@ Figures of ratios, coverages and sensitivities have no units: they would be iden
 
    $C_\mathrm{H,eq}$ answers "how much hydrogen sits on each m² of this metal".
 
+![Sticking probability, exchange flux and hydrogen on the surface](figures/fig_sticking_exchange.png)
+
+*Toy model at 1 bar: items 1 and 2, and the hydrogen on the surface. Dashed: the clean surface (the mechanism's sticking coefficient; $J_0$ and $C_\mathrm{H,eq}$ at the equilibrium coverage).*
+
 Possible later, not planned: the surface supply rate in engineering units (g H₂ m⁻² h⁻¹); the pressure exponent $n$ of $J \propto p^n$ (from the pressure sweep's slope); and, only with literature values supplied, an overlay of literature $k_d$ lines on ours.
 
 ### Points that matter when using Format 2
@@ -357,7 +371,16 @@ Possible later, not planned: the surface supply rate in engineering units (g H�
 - Scope: the Format-2 core plus items 1–4 above.
 - Layout: separate duplicate files (`<name>_per_area`); both versions in each report section; the flux $J$ (not $J/p$) for the pressure sweep.
 
-**Awaiting approval**: the implementation plan.
+**Implemented** (October 2026):
+
+- the Format-2 columns in every results table (`per_area.py`);
+- the `_per_area` copies of `rates_summary`, `temperature_sweep`, `pressure_sweep` and `arrhenius`;
+- `surface_exchange_vs_T` and `surface_exchange_vs_P`: sticking probability, exchange flux, hydrogen on the surface;
+- `surface_coefficients.csv`, the literature-style table of $k_d$ and $k_r$;
+- the `equilibrium` analysis: equilibrium coverage, $T_{1/2}$, the check $q$;
+- both versions in each section of the PDF report.
+
+Where each output is described: `docs/simulation_workflow.md`, Stage 7 (columns), 11.2a, 11.2b and 11.2c, and Tables R1–R3.
 
 ## 13. Symbols
 

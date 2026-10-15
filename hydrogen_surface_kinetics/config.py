@@ -102,6 +102,11 @@ ANALYSIS_DEFAULTS = dict(
         ratio=None,                 # None = impurity_ratio (each impurity keeps its ratio to the probe gas)
         impurities=None,            # None = every impurity, plus the all-impurities mixture
     ),
+    equilibrium=dict(               # equilibrium coverage of the probe step (no solving; after the sweeps, whose steady states it checks)
+        temperatures=None,          # K; None = the temperature series and pressure_temperatures
+        pressures=None,             # Pa; None = a log grid spanning the pressure series (and reference_pressure)
+        per_decade=4,
+    ),
     orders=dict(ratio=None, delta=0.10, impurities=None, **SERIES_DEFAULTS),
     rate_control=dict(
         cases=None,                 # None = reference + every impurity

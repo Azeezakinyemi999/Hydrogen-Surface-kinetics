@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 
 from .. import conditions as C
+from .. import per_area
 from .. import solver as S
 
 
@@ -78,9 +79,9 @@ def point_name(pt):
 SERIES_SUFFIX = {'temperature': 'vs_T', 'pressure': 'vs_P'}
 
 
-def series_file(name, series, ext='png'):
-    """'rates_summary_vs_T.png' / 'rates_summary_vs_P.png'."""
-    return f'{name}_{SERIES_SUFFIX[series]}.{ext}'
+def series_file(name, series, ext='png', suffix=''):
+    """'rates_summary_vs_T.png' / 'rates_summary_vs_P.png' (suffix: e.g. '_per_area')."""
+    return f'{name}_{SERIES_SUFFIX[series]}{suffix}.{ext}'
 
 
 def series_groups(df, series):
@@ -189,7 +190,8 @@ def converged(res):
 
 
 def results_frame(ctx, results, extra_cols=()):
-    """One row per condition: row identifiers + evaluate() + convergence flags."""
+    """One row per condition: row identifiers + evaluate() + convergence flags, and the
+    per-area (Format 2) columns of per_area.add_columns."""
     rows = []
     for key, res in results.items():
         r = res['row']
@@ -209,7 +211,7 @@ def results_frame(ctx, results, extra_cols=()):
                     'start_B_solved_by': (res.get('info_b') or {}).get('method', res.get('status')),
                     'residual_1_per_s': res['info_a'].get('residual_1_per_s') if ok else np.nan})
         rows.append(out)
-    return pd.DataFrame(rows)
+    return per_area.add_columns(pd.DataFrame(rows), ctx.model)
 
 
 def add_poisoning(df, ref_case, n_sites, by=('basis', 'T_K', 'P_ref_bar')):

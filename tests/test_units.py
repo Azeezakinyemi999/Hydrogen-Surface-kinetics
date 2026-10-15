@@ -242,3 +242,42 @@ def test_arrhenius_fit_and_intrinsic_constants(tmp_path):
         assert row.K_eq == pytest.approx(Kc * AR.P0 / (ct.gas_constant * row.T_K), rel=1e-9)
     vh = AR.fit(intr['T_K'], intr['K_eq'])                           # van 't Hoff dH vs the mechanism's thermo
     assert vh['Ea_kJ_per_mol'] == pytest.approx(intr['dH_thermo_kJ_per_mol'].mean(), abs=3.0)
+
+
+def test_per_area_conversions(toy_model):
+    """Format 2 from Format 1: J = TOF x Gamma, kd_eff = J/p, gamma_eff = J/Z, C_H = theta_H Gamma."""
+    import pandas as pd
+    from hydrogen_surface_kinetics import per_area
+    G = per_area.site_density_mol_m2(toy_model)
+    assert np.isclose(G, 2.5e-5)                                    # 2.5e-9 mol/cm2
+    M = per_area.molar_mass_kg_mol(toy_model)
+    Z = 1e5 / np.sqrt(2 * np.pi * M * 8.314462618 * 500.0)          # by hand
+    assert np.isclose(per_area.impingement_flux(500.0, 1e5, M), Z)
+    df = pd.DataFrame({'T_K': [500.0, 500.0], 'P_probe_bar': [1.0, 1.0], 'tof_fwd': [10.0, np.nan],
+                       'tof_rev': [4.0, np.nan], 'tof_net': [6.0, np.nan], 'theta_probe': [0.5, np.nan]})
+    out = per_area.add_columns(df, toy_model).iloc[0]
+    assert np.isclose(out['J_diss_mol_m2_s'], 10 * G) and np.isclose(out['J_net_mol_m2_s'], 6 * G)
+    assert np.isclose(out['J_exchange_mol_m2_s'], 4 * G)            # min(J_diss, J_rec)
+    assert np.isclose(out['kd_eff_mol_m2_s_Pa'], 10 * G / 1e5) and np.isclose(out['gamma_eff'], 10 * G / Z)
+    assert np.isclose(out['C_H_mol_m2'], 0.5 * G)
+    assert per_area.add_columns(df, toy_model).iloc[1][list(per_area.COLUMNS)].isna().all()
+
+
+def test_clean_surface_against_the_mechanism(toy_model):
+    """On an empty surface the sticking probability is the mechanism's (A = 0.05, b = 0, Ea = 0);
+    K agrees with the thermochemistry (converted from its reference pressure to P0 = 1 bar),
+    the equilibrium coverage satisfies K, and
+    J0 = kd p theta_v^2 = kr (theta_H Gamma)^2."""
+    from hydrogen_surface_kinetics import per_area
+    from hydrogen_surface_kinetics.analyses.diagnostics import reaction_thermo
+    G = per_area.site_density_mol_m2(toy_model)
+    for T, p in ((450.0, 1e5), (500.0, 3e4), (550.0, 1e6)):
+        c = per_area.clean_surface(toy_model, T, p)
+        assert np.isclose(c['gamma_clean'], 0.05, rtol=1e-9)
+        _, dG = reaction_thermo(toy_model, {'A2': 1, 'S': 2}, {'A(s)': 2}, T)
+        P_thermo = toy_model.gas.species('A2').thermo.reference_pressure      # 1 atm here; K uses 1 bar
+        assert np.isclose(c['K_eq'], np.exp(-dG * 1e3 / (8.314462618 * T)) * 1e5 / P_thermo, rtol=1e-6)
+        assert np.isclose(c['theta_H_eq'] ** 2 / (c['theta_v_eq'] ** 2 * p / 1e5), c['K_eq'])
+        assert np.isclose(c['theta_H_eq'] + c['theta_v_eq'], 1.0)
+        assert np.isclose(c['J0_clean_mol_m2_s'], c['kr_surface_m2_mol_s'] * (c['theta_H_eq'] * G) ** 2)
+        assert np.isclose(c['kd_clean_mol_m2_s_Pa'] / c['kr_surface_m2_mol_s'], G ** 2 * c['K_eq'] / 1e5)
