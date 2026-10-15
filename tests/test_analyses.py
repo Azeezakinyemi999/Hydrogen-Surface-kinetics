@@ -174,3 +174,48 @@ def test_arrhenius(ctx):
     out = ctx.cfg.output_dir
     for name in ('arrhenius_intrinsic.csv', 'arrhenius_fits.csv', 'arrhenius_local.csv', 'arrhenius.pdf'):
         assert os.path.exists(os.path.join(out, name)), name
+
+
+def test_report_built_at_the_end(ctx):
+    """A run of the full list ends with the PDF report (only the .tex without LaTeX)."""
+    import shutil
+    import subprocess
+    from hydrogen_surface_kinetics import report
+    folder = os.path.join(ctx.cfg.output_dir, 'report')
+    stem = report.run_name(ctx.cfg).replace('/', '_') + '_report'
+    assert os.path.exists(os.path.join(folder, stem + '.tex'))
+    if report.latexmk_path(ctx.cfg.report) is None:
+        pytest.skip('no LaTeX')
+    pdf = os.path.join(folder, stem + '.pdf')
+    with open(pdf, 'rb') as f:
+        assert f.read(4) == b'%PDF'
+    if shutil.which('pdfinfo'):
+        info = subprocess.run(['pdfinfo', pdf], capture_output=True, text=True).stdout
+        assert int(info.split('Pages:')[1].split()[0]) > 20
+
+
+def test_report_covers_every_output(ctx):
+    """Every table and figure of the run is in the report, and every analysis has its section
+    with the how-to-read text."""
+    from hydrogen_surface_kinetics import report
+    rep = report.Report(ctx.cfg, ctx.model, log=lambda *a: None)
+    with open(report.write_tex(rep)) as f:
+        tex = f.read()
+    out = ctx.cfg.output_dir
+    assert {f for f in os.listdir(out) if f.endswith('.csv')} <= rep.used
+    shown = {os.path.splitext(f)[0] for f in rep.used if f.endswith(('.pdf', '.png'))}
+    figures = {os.path.splitext(f)[0] for f in os.listdir(out) if f.endswith('.pdf')}
+    assert figures <= shown, figures - shown
+    paths = {os.path.join('reaction_paths', os.path.splitext(f)[0])
+             for f in os.listdir(os.path.join(out, 'reaction_paths')) if f.endswith('.png')}
+    assert paths <= shown                                         # the reference point, the rest in Appendix A
+    for name in ctx.cfg.analyses:
+        assert f'\\label{{sec:{name}}}' in tex, name
+    assert tex.count('How to read the figures') == len(ctx.cfg.analyses)
+    assert 'exp(' in tex and r'\Delta E_a' in tex                  # the Arrhenius expressions
+
+
+def test_report_command(ctx, capsys):
+    """The report can be rebuilt from the saved results alone."""
+    assert cli_main(['report', ctx.cfg.settings_file, '--tex-only']) == 0
+    assert 'report: wrote' in capsys.readouterr().out

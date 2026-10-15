@@ -16,6 +16,7 @@ Temperature and pressure effects are kept apart: a **temperature series** (`temp
 | `convergence` | how the reactor method reached (or failed to reach) each steady state: coverages, TOF and residual against time |
 | `curves` | rate vs impurity level and the level that halves the rate; both branches where two steady states exist; the site-blocking split |
 | `sweep` | Arrhenius plot, apparent activation energy, the temperature at which poisoning lifts, surface coverage against T |
+| `arrhenius` | the hydrogen rates as $A\,\exp(-E_a/RT)$: intrinsic dissociation, recombination and equilibrium constants of the metal, and the observed rates per case, with each impurity's $\Delta E_a$ and $A/A_{\mathrm{ref}}$ (no solving) |
 | `pressure_sweep` | rate against H₂ pressure at fixed purity, its local slope, the half-rate pressure, surface coverage against p |
 | `orders` | reaction orders in the probe gas and the impurity |
 | `rate_control` | thermodynamic rate control (TRC) and degree of rate control (DRC), one figure per (T, p) point |
@@ -43,12 +44,13 @@ bash run.sh runs/ni_first_try check                 # settings, mechanism, both 
 bash run.sh runs/ni_first_try                       # every analysis listed in settings.py
 bash run.sh runs/ni_first_try --only curves,sweep   # a subset
 bash run.sh runs/ni_first_try status                # what is cached and saved
+bash run.sh runs/ni_first_try report                # rebuild the PDF report from the saved results
 bash run.sh runs/try_2/Cu runs/try_2/Fe runs/try_2/Ni   # several runs, one after another
 ```
 
 Give each run as its folder or its `settings.py` (globs such as `runs/try_*/Ni` work), then `check` or `status` if wanted, then options; the options apply to every run. A failed run does not stop the others, and a summary at the end lists any that failed.
 
-Tables (CSV) and figures (PNG, plus PDF in publication style) go to `runs/<name>/output/`, and the log to `runs/<name>/run.log`. Every solve is cached, so a rerun only solves what changed. `run.sh` keeps the Mac awake during long runs; the full Ni analysis takes about 2 hours on 8 cores the first time.
+Tables (CSV) and figures (PNG, plus PDF in publication style) go to `runs/<name>/output/`, and the log to `runs/<name>/run.log`. A run of every analysis in `settings.py` ends with a PDF report, `output/report/<run>_report.pdf`: one section per analysis with its goal, key numbers, bordered tables, figures and how to read each figure panel by panel (needs LaTeX; `--no-report` skips it). Every solve is cached, so a rerun only solves what changed. `run.sh` keeps the Mac awake during long runs; the full Ni analysis takes about 2 hours on 8 cores the first time.
 
 Or from Python / Jupyter (see `notebooks/analyze.ipynb`):
 
@@ -93,4 +95,4 @@ Everything else has defaults. Then `bash run.sh runs/<new name> check`: it lists
 ~/anaconda3/envs/rmg4.0/bin/python -m pytest
 ```
 
-The tests use a small fictitious mechanism (`tests/data/toy_mechanism.yaml`) and take about a minute.
+The tests use a small fictitious mechanism (`tests/data/toy_mechanism.yaml`) and take about 15 minutes, most of it one end-to-end run of every analysis and its PDF report.

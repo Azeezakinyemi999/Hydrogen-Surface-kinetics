@@ -40,6 +40,7 @@ How the `hydrogen_surface_kinetics` package simulates a surface reaction mechani
   [Running an analysis](#running-an-analysis) ·
   [Writing a settings.py](#writing-a-settingspy) ·
   [Reading the results](#reading-the-results) ·
+  [The run report](#the-run-report) ·
   [Troubleshooting](#troubleshooting) ·
   [Reproducibility checklist](#reproducibility-checklist) ·
   [Code map](#code-map) ·
@@ -162,7 +163,8 @@ flowchart TD
 | 8 | Surface composition | results | coverage tables, bar chart | `analyses/composition.py` |
 | 9 | Rate plots | summary table | `rates_summary_vs_T.png`, `_vs_P.png` | `analyses/steady_state.py` |
 | 10 | Mechanism diagnostics | mechanism, results | binding check, what-if runs, traces | `analyses/diagnostics.py` |
-| 11 | Further analyses | the Stage 4–6 solver, results | poisoning curves, temperature and pressure sweeps, orders, rate control, path diagrams, transients | `analyses/curves.py` … `analyses/transients.py` |
+| 11 | Further analyses | the Stage 4–6 solver, results | poisoning curves, temperature and pressure sweeps, Arrhenius forms, orders, rate control, path diagrams, transients | `analyses/curves.py` … `analyses/transients.py` |
+| – | The run report | the output folder, `settings.py` | `output/report/<run>_report.pdf` | `report.py`, `report_text.py` ([The run report](#the-run-report)) |
 
 Paths are inside the package folder `hydrogen_surface_kinetics/`; the [Code map](#code-map) lists every file. Each analysis is chosen by its name in `analyses = [...]` of the run's `settings.py` ([Running an analysis](#running-an-analysis)). The RMG input of a run is also called `input.py`; in this document `input.py` always means RMG's file, and `settings.py` the package's.
 
@@ -887,6 +889,7 @@ Report the results with their caveats listed; or run what-if sensitivity tests t
 |---|---|---|---|
 | 11.1 Poisoning curves | `curves` | impurities × levels × T, + 1 reference per T | `run_conditions` (two starts, cache) |
 | 11.2 Temperature sweep | `sweep` | (2 + impurities) × T: reference, each impurity, the mixture | `run_conditions` |
+| 11.2a Arrhenius form | `arrhenius` | none | the temperature sweep's results; fresh surface objects for the intrinsic constants |
 | 11.2b Pressure sweep | `pressure_sweep` | (2 + impurities) × p × T | `run_conditions` |
 | 11.3 Reaction orders | `orders` | 3 per probe-gas-only case, 5 per impurity case, per T | `run_conditions` |
 | 11.4 Degree of rate control | `rate_control` | 2 per screened reaction and per screened species, per case | `run_jobs` (one start, cache) |
@@ -933,6 +936,24 @@ $$E_{\mathrm{app}}(T) = -R\,\frac{\partial\ln\mathrm{TOF}}{\partial(1/T)} ;$$
 
 **What covers the surface against temperature** (`sweep_coverages.png`): one panel per case, one stacked bar per solved temperature, with the species colors of Stage 8. Bars rather than areas, because every temperature is a separate solve: an isolated converged point still shows, and a temperature without a steady state is a visible gap. This is the figure that explains the rate curves, for example which adsorbate holds the sites up to which temperature.
 
+### 11.2a Hydrogen rates in Arrhenius form
+
+**What it does.** Writes the rates of the probe step as $k = A\,\exp(-E_a/RT)$, at two levels, without solving anything.
+
+- **Intrinsic: the probe step alone.** At each temperature (default: the temperature sweep's; `arrhenius['temperatures']`), on fresh surface objects at $p_{A_2}$ = `reference_pressure`:
+  - $k_{\mathrm{diss}} = q_f/\Gamma$ on an empty surface ($\theta_\ast = 1$): the dissociation rate per site;
+  - $k_{\mathrm{rec}} = q_r/\Gamma$ on a surface full of A∗ ($\theta_{A\ast} = 1$): the recombination rate per site;
+  - $K = (k_{\mathrm{diss}}/k_{\mathrm{rec}})\,P^\circ/p_{A_2}$, the dimensionless equilibrium constant $\theta_{A\ast}^2/(\theta_\ast^2\,p_{A_2}/P^\circ)$ with $P^\circ$ = 1 bar. Its van 't Hoff fit, $\ln K = \Delta S^\circ/R - \Delta H^\circ/RT$, gives $\Delta H^\circ$ and $\Delta S^\circ$, listed next to the values from the mechanism's thermochemistry at each temperature.
+
+  These belong to the metal (the mechanism), not to an impurity. Rate constants have no coverage dependence in RMG mechanisms, so $k_{\mathrm{diss}}/k_{\mathrm{rec}} = K_c\,p_{A_2}/RT$ exactly. For a sticking reaction, $k_{\mathrm{diss}} \propto \gamma\,p/\sqrt{T}$ ([Section 2.2](#22-rate-laws)): with no barrier in $\gamma$, the fitted $E_a$ is about $-RT/2$ (−2.7 kJ/mol at 650 K).
+- **Observed: the steady-state surface of each case.** From the temperature sweep (11.2), or its `temperature_sweep.csv` from an earlier run; the sweep is never re-run. For the reference, each impurity and the mixture: the dissociation TOF (`tof_fwd`), the recombination TOF (`tof_rev`) and their ratio, which is 1 when the probe step is at equilibrium. Each is fitted on its converged points.
+
+Every fit reports $A$, $E_a$, $R^2$, the number of points, the temperature range and its exact conditions ($p_{A_2}$, and each impurity's partial pressure and ratio). Impurity cases also get $\Delta E_a = E_a - E_{a,\mathrm{ref}}$ and $A/A_{\mathrm{ref}}$ for the same quantity: an impurity's effect on the hydrogen rates in two numbers. A fit with $R^2$ below `min_r2` (0.99) is flagged `curved`: one $E_a$ does not describe the whole range, and the local values $E_a(T) = -R\,\partial\ln y/\partial(1/T)$ of `arrhenius_local.csv` should be read instead. $R^2$ is left empty for a quantity that does not change (forward/reverse = 1 at equilibrium).
+
+**Interpretation.** The observed $E_a$ of dissociation is higher than the intrinsic one when the step has to wait for free sites: it includes the cost of desorbing A∗ or the impurity. For an impurity that holds most sites, $\Delta E_a$ approaches $n$ times the magnitude of its adsorption enthalpy (11.2). Compare metals with the intrinsic constants, and impurities with $\Delta E_a$ and $A/A_{\mathrm{ref}}$ under the same conditions.
+
+**Outputs.** `arrhenius_intrinsic.csv`, `arrhenius_fits.csv`, `arrhenius_local.csv`, and `arrhenius.png`: (a) intrinsic $k_{\mathrm{diss}}$ and $k_{\mathrm{rec}}$ against $1000/T$, (b) the van 't Hoff plot of $K$, (c) the observed dissociation TOF per case with its fit, (d) $E_a$ of dissociation and recombination per case against the intrinsic dissociation $E_a$. Code: `analyses/arrhenius.py`; `tests/test_units.py` checks that a fit recovers known $A$ and $E_a$, and that $k_{\mathrm{diss}}/k_{\mathrm{rec}} = K_c\,p/RT$.
+
 ### 11.2b Pressure sweep
 
 **What it does.** The pressure counterpart of 11.2: at each temperature of `pressure_sweep['temperatures']` (default `pressure_temperatures`), the probe-gas pressure runs over a log grid (default `per_decade` = 2 points per decade spanning the pressure series, or two decades either side of `reference_pressure` without one), for the reference, each impurity and the mixture. Every impurity keeps its ratio to the probe gas (`impurity_ratio`, one number or one per impurity), so the gas has the same purity at every pressure. It reports:
@@ -941,7 +962,7 @@ $$E_{\mathrm{app}}(T) = -R\,\frac{\partial\ln\mathrm{TOF}}{\partial(1/T)} ;$$
 - the poisoning factor against pressure, and the **half-rate pressure**: the first pressure, going up, at which $\Pi$ crosses 0.5, with the direction (`recovers above half` or `falls below half`) in `half_rate_pressure.csv`;
 - what covers the surface against pressure (`pressure_sweep_coverages_<T>K.png`).
 
-**Interpretation for a two-site probe step.** With the probe adsorbate filling the surface, $	heta_st \propto p_{A_2}^{-1/2}$ and the slope falls towards 0 as $p$ rises; with a strongly bound impurity at fixed purity, $	heta_st \propto 1/p_I \propto 1/p$, and the slope tends to $-1$. Code: `analyses/pressure_sweep.py`.
+**Interpretation for a two-site probe step.** With the probe adsorbate filling the surface, $\theta_\ast \propto p_{A_2}^{-1/2}$ and the slope falls towards 0 as $p$ rises; with a strongly bound impurity at fixed purity, $\theta_\ast \propto 1/p_I \propto 1/p$, and the slope tends to $-1$. Code: `analyses/pressure_sweep.py`.
 
 ### 11.3 Reaction orders
 
@@ -1074,9 +1095,10 @@ bash run.sh runs/ni_first_try --workers 4 --recompute  # fewer processes; ignore
 bash run.sh runs/ni_first_try status                   # what is cached and saved
 bash run.sh runs/try_2/Cu runs/try_2/Fe runs/try_2/Ni  # several runs, one after another
 bash run.sh runs/try_*/Ni/settings.py check            # a folder or its settings.py; globs work
+bash run.sh runs/try_4/Cu report                       # rebuild the PDF report from the saved results
 ```
 
-`run.sh` keeps the Mac awake (`caffeinate -dims`), sets one thread per worker, uses the `rmg4.0` Python (or `$PYTHON`), and appends everything to `runs/<name>/run.log` with start and end times and the exit status. With several runs, they go one after another, each to its own `run.log`; the options after `check`/`status` apply to all of them. Every path is looked up before the first run starts, so a typo fails at once rather than hours in. A failed run does not stop the rest, a summary at the end lists the failures, and the exit status is that of the last failed run. Ctrl-C stops the whole batch. Under the hood it calls `python -m hydrogen_surface_kinetics check|run|status <settings.py>`, which works without `run.sh` too.
+`run.sh` keeps the Mac awake (`caffeinate -dims`), sets one thread per worker, uses the `rmg4.0` Python (or `$PYTHON`), and appends everything to `runs/<name>/run.log` with start and end times and the exit status. With several runs, they go one after another, each to its own `run.log`; the options after `check`/`status` apply to all of them. Every path is looked up before the first run starts, so a typo fails at once rather than hours in. A failed run does not stop the rest, a summary at the end lists the failures, and the exit status is that of the last failed run. Ctrl-C stops the whole batch. Under the hood it calls `python -m hydrogen_surface_kinetics check|run|status|report <settings.py>`, which works without `run.sh` too. A run of every analysis in `settings.py` ends with the PDF report ([The run report](#the-run-report); `--no-report` skips it).
 
 **From a notebook** (`notebooks/analyze.ipynb` is a ready-made front end):
 
@@ -1092,7 +1114,7 @@ ctx.outputs['curves']['tolerance']                     # every table is a DataFr
 
 The command line and the notebook share the cache: whatever one solved, the other loads.
 
-**Which analyses.** `analyses = [...]` in `settings.py` chooses them; `--only` (command line) or `only=` (Python) overrides that list for one run. They always run in this order: `steady_state`, `composition`, `diagnostics`, `convergence`, `curves`, `sweep`, `pressure_sweep`, `orders`, `rate_control`, `paths`, `transients`, `flux`. `flux` (Stage 2) needs RMG-Py and is not run unless named.
+**Which analyses.** `analyses = [...]` in `settings.py` chooses them; `--only` (command line) or `only=` (Python) overrides that list for one run. They always run in this order: `steady_state`, `composition`, `diagnostics`, `convergence`, `curves`, `sweep`, `arrhenius`, `pressure_sweep`, `orders`, `rate_control`, `paths`, `transients`, `flux`. `flux` (Stage 2) needs RMG-Py and is not run unless named.
 
 **How long.** `check` lists, for every chosen analysis, the number of points and solves and how many are already cached, before anything runs (exact for the main conditions, curves, sweep and orders; an estimate for rate control and transients, whose job lists depend on solved states). Rate control dominates: about 50 solves per case and point. For the 196-species Ni mechanism on 8 workers, the full list (without `flux`) took about 2 hours from scratch: main steady states 10 min, curves 20 min, sweep 45 min, orders 10 min, rate control 25 min, the rest a few minutes. Rerunning from the cache takes a few minutes, mostly for recomputing rates from the stored coverages. `flux` takes about 2 minutes per reactor at `n_points = 12`, longer at the default 100.
 
@@ -1160,6 +1182,7 @@ This section is for interpreting the outputs, not for how they are computed (Par
 | How much does each impurity slow it down? | `rates_summary_*` (b); `steady_state_results.csv` | `slowdown_x` (times slower), `poisoning_factor` |
 | From what impurity level is it a problem? | `poisoning_curves_*` (a); `poisoning_tolerance.csv` | `ratio_at_half_rate`, `ppm_of_probe` |
 | Does a higher temperature help? | `temperature_sweep` (c); `release_temperature.csv` | `release_T_K`: where the rate recovers to half |
+| What are the hydrogen rates in Arrhenius form, and how does each impurity shift them? | `arrhenius`; `arrhenius_fits.csv` | $A$, $E_a$ of dissociation, recombination and their ratio; `dEa_vs_reference_kJ_per_mol`, `A_over_reference` |
 | Does a higher pressure help? | `pressure_sweep` (c); `half_rate_pressure.csv` | `half_rate_P_bar` and its `direction` |
 | Why is it slower: lost sites, or something else? | `site_blocking`; `blocking_check` in the tables | the rate follows the site-blocking prediction or not |
 | Which species or step controls the rate? | `rate_control_<T>K_<P>bar` (TRC), `…_DRC`; `reaction_orders_*`; `sensitivity.csv`; `reaction_orders.csv` | TRC per species, DRC per reaction, reaction orders |
@@ -1168,6 +1191,7 @@ This section is for interpreting the outputs, not for how they are computed (Par
 | Is there more than one possible steady state? | rings and dashed branches in `poisoning_curves_*`; `starts_agree` | `starts_agree = False` |
 | Can I trust the mechanism? | `binding_check`; `mechanism_switch_off.csv`; `top_reactions.csv` | verdicts vs literature; sensitivity to suspect species |
 | Did the solver really converge? | `status` command; `convergence`; `converged` columns | accepted checkpoint, residual below 1 and staying there |
+| All of it in one document? | `output/report/<run>_report.pdf` ([The run report](#the-run-report)) | every table and figure, with how to read each |
 
 ### Table R2. Figures
 
@@ -1180,6 +1204,7 @@ This section is for interpreting the outputs, not for how they are computed (Par
 | `poisoning_curves_vs_T`, `_vs_P` (Stage 11.1) | one column per point (up to four per figure): Π against impurity level (top), impurity-held sites (bottom); one line per impurity | read along a line: where it crosses the dashed 0.5 line (diamond) is the tolerated level. A steep drop over a decade = a threshold-like poison. Ring + dashed line + shaded band = two steady states: solid is a fresh (clean) catalyst, dashed one that was covered first; inside the band the history decides | Π below $10^{-12}$ is real (log axis, no floor on Π); coverages are floored at $10^{-12}$ for display only |
 | `site_blocking` (Stage 7) | at one point, per impurity: (a) empty vs impurity-held sites, (b) site-count factor f, (c) Π from rates (dots), full site-blocking prediction (line), coverage-only prediction (dashed) | dots on the line: the impurity acts only by taking sites. Dashed below the line: multi-site adsorbates raise f, and the coverage-only estimate would exaggerate the poisoning | dots off the line: the probe step is not simply elementary, or rates depend on coverage; see `blocking_check` |
 | `temperature_sweep` (Stage 11.2) | (a) Arrhenius plot, log TOF against 1000/T (hot on the left), (b) apparent activation energy against T, (c) Π against T | (a) a straight line = constant E_app; curvature = coverages changing with T. (b) an impurity case far above the reference = the impurity frees sites as T rises. (c) a rising curve = poisoning lifts with temperature; the diamond is the release temperature | gaps = no steady state; RMG estimates are least reliable far from the conditions it was run at |
+| `arrhenius` (11.2a) | (a) intrinsic $k_{\mathrm{diss}}$, $k_{\mathrm{rec}}$ against $1000/T$; (b) van 't Hoff plot of $K$; (c) observed dissociation TOF per case with fits; (d) $E_a$ per case, forward and reverse | (a) a flat $k_{\mathrm{diss}}$ = no barrier, the rate is the impingement flux times $\gamma$; a steep $k_{\mathrm{rec}}$ = activated desorption. (b) $K$ falling with T = exothermic adsorption. (c) points off the line = curved, read the local $E_a$. (d) observed above the dashed intrinsic line = the step waits for free sites; equal forward and reverse bars = the step is at equilibrium | each fit's conditions and $R^2$ in `arrhenius_fits.csv`; only converged sweep points are fitted |
 | `sweep_coverages`, `pressure_sweep_coverages_<T>K` | stacked bars of coverage against T (or p), one panel per case | follow a color across bars to see which adsorbate gives way to which as T (or p) changes; this explains the rate curves | missing bars = no steady state |
 | `pressure_sweep` (Stage 11.2b) | per temperature: (a) TOF against p (log–log), (b) local slope d ln TOF/d ln p, (c) Π against p | (b) for the probe gas alone, slope 1 = few adsorbates, 0 = surface saturated with H\*. With an impurity at fixed purity, slope near −1 = a strong poison that scales with pressure. (c) diamond = the pressure where Π crosses 0.5 | impurities scale with H₂ (same purity), so this is not "more H₂ against a fixed impurity" |
 | `rate_control_<T>K_<P>bar`, `…_DRC` (Stage 11.3–11.4); `reaction_orders_vs_T`, `_vs_P` (11.3) | per point: TRC bars per case; DRC bars for the cases where it is not trivial. Orders: one panel per point | TRC: the bar is $X_{\mathrm{TRC}} = \partial\ln r/\partial(-G/RT)$, how strongly the rate responds when that species is made more stable; negative = it holds sites the reaction needs. Values sum to about −n(1−θ\*) (−2 for H₂ dissociation on a crowded surface). DRC (blue forward, orange net): which elementary steps limit the rate; net values add up to 1. Orders: see Table R4 | DRC near equilibrium is round-off except on the probe step; DRC is shown only where it carries information |
@@ -1195,6 +1220,7 @@ This section is for interpreting the outputs, not for how they are computed (Par
 | `steady_state_surface_species.csv` | `species`, `coverage` | every species above 10⁻³ per condition, readable names |
 | `poisoning_tolerance.csv` | `ratio_at_half_rate`, `ppm_of_probe` | impurity level that halves the rate. Notes: "already halved at the lowest level: at most this" (an upper bound) or "never halved in the range tested" |
 | `release_temperature.csv` | `release_T_K` | lowest T at which the rate is back to half. Notes: "rate never below half (not poisoning)", "still poisoned at <highest T> K" |
+| `arrhenius_fits.csv` | `A`, `Ea_kJ_per_mol`, `R2`, `conditions`, `dEa_vs_reference_kJ_per_mol`, `A_over_reference`, `curved` | one row per level (intrinsic, observed), quantity and case; `arrhenius_intrinsic.csv` has $k_{\mathrm{diss}}$, $k_{\mathrm{rec}}$, $K$, $\Delta H^\circ$, $\Delta S^\circ$ per T |
 | `half_rate_pressure.csv` | `half_rate_P_bar`, `direction` | probe-gas pressure where Π crosses 0.5, and whether it recovers above or falls below half going up |
 | `reaction_orders.csv` | `order_probe`, `order_impurity` | d ln TOF / d ln p at the point (Table R4) |
 | `sensitivity.csv` | `X_tof_fwd` (TRC rows), `X_probe_consumed` (DRC rows) | TRC: the largest negative values name the site holders; DRC: the rate-limiting steps |
@@ -1222,6 +1248,35 @@ This section is for interpreting the outputs, not for how they are computed (Par
 | Gaps in sweep lines, "not converged" in `status` | no steady state within `reactor_t_max` | look at the `convergence` trace of that condition |
 | A binding verdict "TOO STRONG" for a dominant adsorbate | its coverage, and the poisoning it causes, are probably over-predicted | use `switch_off` to see if conclusions survive; ask for a corrected mechanism (Stage 10.5) |
 
+## The run report
+
+A run of the full `analyses` list ends with one PDF, `output/report/<run>_report.pdf` (for example `try_4_Cu_report.pdf`), written to be read without opening any other file. It is built from the output folder (tables and figures), `settings.py` and the mechanism, which is loaded only for its facts and warnings. It never solves anything, so it can be rebuilt at any time, for a finished run or a partial one:
+
+```bash
+bash run.sh runs/try_4/Cu report               # rebuild the PDF from the saved results
+bash run.sh runs/try_4/Cu report --tex-only    # write the .tex only (no LaTeX needed)
+bash run.sh runs/try_4/Cu --no-report          # run the analyses without building it at the end
+```
+
+From Python: `from hydrogen_surface_kinetics import report; report.build('runs/try_4/Cu/settings.py')`.
+
+| Part | Contents |
+|---|---|
+| Title page | run, catalyst (from RMG's `input.py`), mechanism file and checksum, date, package version and commit, Cantera version |
+| Run summary | the system (species, reactions, site density, probe reaction); both series; the impurities with their ratios and partial pressures; which analyses have outputs; settings that differ from the defaults; mechanism warnings; convergence of every results table, and the main conditions that are not single steady states; the conventions (TOF, $\Pi$, $r$, $\theta$, series, markers) |
+| One section per analysis with outputs | the **goal**; what was computed; **key numbers** generated from the tables (e.g. the strongest impurity at each point, the tolerated ppm, release temperatures, $\Delta E_a$); the **tables**; the **figures**; then **how to read** the table columns and each kind of figure, panel by panel: what it shows, how to read it, and what each trend means ("a curve going up with T ⇒ poisoning lifts with temperature") |
+| Appendix A | the reaction-path diagrams at the other points |
+| Appendix B | every output file: its size, its section, and whether the report shows it |
+| Appendix C | the run's `settings.py` |
+
+**Tables** have all borders, 3 significant figures and "--" for a missing value, with a heavier rule between cases. Per-point results are split like the series: one table for the temperature series and one per pressure-series temperature. A table with more than `report['max_rows']` (60) rows is replaced by a summary made for it, and its caption names the CSV with all the rows. For example, the poisoning curves become one row per impurity and point, and the sensitivity table the main site holder and rate-controlling steps per case and point.
+
+**Figures** come as the PDF of each figure (publication style) or the PNG, every part in order. The reaction-path diagrams of the reference point (the lowest temperature at `reference_pressure`) are in their section, the others in Appendix A (`report['path_diagrams']`).
+
+**Text.** The fixed text (goals, panel descriptions, trends, column meanings) is in `report_text.py`, written from Tables R2–R4; every number comes from the run. Editing `report_text.py` changes every report built afterwards.
+
+**Needs LaTeX**: `latexmk` with `pdflatex` (TeX Live; MacTeX on macOS) and the packages longtable, makecell, enumitem, pdflscape, listings, caption and float. `check` says whether it was found. Without it, the `.tex` is written instead. A report that fails to build never fails the run: the log says why, and the `report` command rebuilds it once the cause is fixed.
+
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
@@ -1247,6 +1302,8 @@ This section is for interpreting the outputs, not for how they are computed (Par
 | `No module named hydrogen_surface_kinetics` | the package is not installed in this environment | `pip install --no-deps -e .` in the repository, with that environment's pip |
 | A flux reactor reports `worker closed the pipe without a result` | a worker was forked after RDKit/Cairo drawing (macOS) | Stage 2 runs reactors in the main process; do not run it through `run_jobs` |
 | `status` lists results "not converged" | conditions with no steady state within `reactor_t_max` (e.g. slow conversions) | a result, not an error ([Stage 11.2](#112-temperature-sweep)); they appear as gaps |
+| `report not built: ReportError: LaTeX failed` at the end of a run | a name or value LaTeX cannot typeset, or a missing LaTeX package | the message quotes the LaTeX error; the results are saved: fix it, then `bash run.sh runs/<name> report` |
+| `report: wrote ….tex; LaTeX (latexmk) not found` | no TeX installation on the PATH or in `/Library/TeX/texbin` | install TeX Live / MacTeX, or set `report = {'latexmk': '/path/to/latexmk'}` |
 | Edits to a notebook disappear | the editor saved its older open copy over the file | reload the notebook from disk before saving |
 | Huge reverse rate constants after editing thermochemistry | thermo changed, kinetics not re-estimated | regenerate the mechanism ([Stage 10.5](#105-why-thermochemistry-is-not-edited-in-place)) |
 | Surface nodes in flux diagrams have no border | one normalization for gas and surface concentrations | compare node borders within a phase only ([Stage 2](#stage-2-transient-batch-simulation-and-flux-diagrams)) |
@@ -1256,6 +1313,7 @@ This section is for interpreting the outputs, not for how they are computed (Par
 ## Reproducibility checklist
 
 - Keep the run's `settings.py` under version control with the package; record the package commit (`git log -1`).
+- The report's title page records the package version and commit, the Cantera version and the mechanism's checksum.
 - `check` and the start of every run print the mechanism summary; the cache fingerprints include the mechanism's SHA-256 checksum and the Cantera version, so a changed file or version is never mixed with old results.
 - Keep the `output/cache*/` folders with the outputs: they reproduce every table in minutes.
 - Re-run `docs/figures/check_equations.py` after upgrading Cantera, and `python -m pytest` after changing the package.
@@ -1280,11 +1338,13 @@ All code is in the package folder `hydrogen_surface_kinetics/`.
 | `analyses/composition.py` | coverage tables and the surface-composition plot | 8 |
 | `analyses/diagnostics.py` | binding check, switch-off what-if, top reactions | 10 |
 | `analyses/convergence.py` | reactor-method traces with the accepted checkpoint (Figure 4 on real data) | 4 |
-| `analyses/curves.py`, `sweep.py`, `pressure_sweep.py`, `orders.py`, `rate_control.py`, `paths.py`, `transients.py` | the further analyses | 11.1–11.6 |
+| `analyses/curves.py`, `sweep.py`, `arrhenius.py`, `pressure_sweep.py`, `orders.py`, `rate_control.py`, `paths.py`, `transients.py` | the further analyses | 11.1–11.6 |
 | `analyses/flux.py` | flux-diagram videos of the RMG reactors (optional, needs RMG-Py) | 2 |
-| `analyses/__init__.py` | `run()`: runs the chosen analyses in order | all |
+| `analyses/__init__.py` | `run()`: runs the chosen analyses in order, then the report | all |
+| `report.py` | the PDF report: tables, figures and text per analysis, LaTeX build | all |
+| `report_text.py` | the report's fixed text: goals, column meanings, how to read each figure panel | all |
 | `analyses/plan.py` | solves per analysis and how many are cached, for `check` | all |
-| `cli.py`, `__main__.py` | `python -m hydrogen_surface_kinetics check/run/status` | all |
+| `cli.py`, `__main__.py` | `python -m hydrogen_surface_kinetics check/run/status/report` | all |
 
 Around the package:
 
@@ -1421,7 +1481,7 @@ Every setting of `settings.py`, with its default (from `config.py`). Dictionary 
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `analyses` | `['steady_state']` | any of `steady_state`, `composition`, `diagnostics`, `convergence`, `curves`, `sweep`, `pressure_sweep`, `orders`, `rate_control`, `paths`, `transients`, `flux` |
+| `analyses` | `['steady_state']` | any of `steady_state`, `composition`, `diagnostics`, `convergence`, `curves`, `sweep`, `arrhenius`, `pressure_sweep`, `orders`, `rate_control`, `paths`, `transients`, `flux` |
 | `plot_style` | `'screen'` | `'screen'` (bold, 300 dpi PNG) or `'publication'` (7 pt, PDF + 600 dpi PNG) |
 | `publication_width_cm` | 17.8 | 17.8 double column, 8.5 single column; tall figures are capped at 22 cm high |
 
@@ -1434,12 +1494,22 @@ Every setting of `settings.py`, with its default (from `config.py`). Dictionary 
 | `convergence` | `conditions` (`(case, T)` or `(case, T, P)`; None = the main conditions whose clean start did not converge, else the reference at the first point), `max_conditions` (6), `per_decade` (2) | 4 |
 | `curves` | `ratios` ($10^{-6}$ … 0.25, 12 levels), `impurities`, `blocking_point` (`(T, P)` of the site-blocking figure; None = the first point), the series keys | 11.1 |
 | `sweep` | `temperatures` (None = main range in `step` K), `step` (50), `ratio`, `impurities` (None = every impurity and the mixture); always at `reference_pressure` | 11.2 |
+| `arrhenius` | `temperatures` (None = the temperature sweep's), `min_r2` (0.99: below it a fit is flagged `curved`) | 11.2a |
 | `pressure_sweep` | `pressures` (Pa; None = a log grid over the pressure series), `per_decade` (2), `temperatures` (None = `pressure_temperatures`), `ratio`, `impurities` | 11.2b |
 | `orders` | `ratio`, `delta` (0.10), `impurities`, the series keys | 11.3 |
 | `rate_control` | `cases` (None = reference + every impurity), the series keys, `ratio`, `drc_delta` (0.05), `drc_top_n` (20), `trc_delta` ($10^{6}$ J/kmol), `trc_min_coverage` ($10^{-3}$) | 11.4 |
 | `paths` | `conditions` (`(case, T)` or `(case, T, P)`; None = every case at every series point), `elements` (None = the probe gas's), `threshold` ($10^{-8}$), `flow_type` (`'OneWayFlow'`), `formats` (`['png']`), `style` (`'rmg'` or `'cantera'`), `species_images` (None = `species/` next to `settings.py`, else `output/flux_species/`; False = none), `image_names` (False), `orientation` (`'TB'` or `'LR'`), `edge_labels` (True) | 11.5 |
 | `transients` | `impurities`, the series keys, `ratios` ($10^{-6}$, $10^{-4}$, $10^{-2}$, 0.25), `t_start` ($10^{-9}$ s), `t_stop` ($10^{8}$ s), `per_decade` (4) | 11.6 |
 | `flux` | `rmg_path`, `rmg_input` and `seed_dir` (None = the RMG `input.py` and `seed/seed` next to `settings.py`), `species_dir` (None = `output/flux_species`), `reactor_indices` (None = all), `n_points` (100), `rtol`/`atol` ($10^{-10}$, $10^{-22}$), `skip_existing` (True) | 2 |
+
+**`report`** ([The run report](#the-run-report))
+
+| Key | Default | Meaning |
+|---|---|---|
+| `enabled` | True | build the report at the end of a run of the full `analyses` list |
+| `max_rows` | 60 | tables up to this many rows in full; longer ones as a summary, with the CSV named |
+| `path_diagrams` | `'reference+appendix'` | the reference point's diagrams in the section and the others in Appendix A; `'reference'`: only those; `'all'`: all in the section |
+| `latexmk` | None | path of `latexmk`; None = on the PATH or in `/Library/TeX/texbin` |
 
 **RMG's flux-diagram module** (`rmgpy/tools/fluxdiagram.py`, values in the local build): `max_node_count` = 50, `max_edge_count` = 50, `concentration_tol` = $10^{-6}$, `species_rate_tol` = $10^{-6}$, `max_node_pen_width` = 10, `max_edge_pen_width` = 10, `video_fps` = 6, `initial_padding` = `final_padding` = 5 s, layout program `dot`.
 
@@ -1487,6 +1557,7 @@ All files are in the run's `output/` folder. With `plot_style = 'publication'`, 
 - `site_blocking.png` (Stage 7, drawn with 11.1).
 - `poisoning_curves.csv`, `poisoning_curves_vs_T/_vs_P.png` (11.1): one row per (point, case, level) with the Stage 7 columns and `ratio`; `poisoning_tolerance.csv`: `ratio_at_half_rate`, `ppm_of_probe` and `note` per (point, impurity).
 - `temperature_sweep.csv`, `temperature_sweep.png` (11.2): the same per (case, T), plus `E_app_kJ_per_mol`; `release_temperature.csv`: `release_T_K` and `note` per impurity; `sweep_coverages.png`: what covers the surface against temperature.
+- `arrhenius_intrinsic.csv` (11.2a): `T_K`, `k_diss_clean_1_per_s`, `k_rec_full_1_per_s`, `K_eq`, `dH_thermo_kJ_per_mol`, `dS_thermo_J_per_mol_K`; `arrhenius_fits.csv`: `level` (`intrinsic` or `observed`), `quantity`, `case`, `conditions`, `n_points`, `T_min_K`, `T_max_K`, `A`, `Ea_kJ_per_mol`, `R2`, `dH_kJ_per_mol` and `dS_J_per_mol_K` (for $K$), `dEa_vs_reference_kJ_per_mol`, `A_over_reference`, `curved`; `arrhenius_local.csv`: `case`, `T_K`, `Ea_local_fwd_kJ_per_mol`, `Ea_local_rev_kJ_per_mol`, `fwd_over_rev`; `arrhenius.png`.
 - `pressure_sweep.csv`, `pressure_sweep.png` (11.2b): per (case, T, p), plus `slope_dlnTOF_dlnp`; `half_rate_pressure.csv`: `half_rate_P_bar`, `direction` and `note` per (T, impurity); `pressure_sweep_coverages_<T>K.png`.
 - `reaction_orders.csv` (11.3): `series`, `T_K`, `P_ref_bar`, `case`, `tof_fwd_base`, `order_probe`, `order_impurity`, `all_starts_agree`.
 - `rate_control_<T>K_<P>bar.png` (11.3–11.4), one per point: TRC per case; `rate_control_<T>K_<P>bar_DRC.png`: the DRC, for the cases where it is not trivial; `reaction_orders_vs_T/_vs_P.png` (11.3): orders per case, one panel per point.
@@ -1505,6 +1576,8 @@ All files are in the run's `output/` folder. With `plot_style = 'publication'`, 
 Each `info` dictionary holds `method`, `converged`, the four `*_ok` checks, `residual_1_per_s`, `residual_species`, `residual_allowed_1_per_s`, `residual_over_tof`, `tof_fwd_1_per_s`, `sum_error`, `min_coverage`, `gas_drift`, `total_seconds`, and `attempts` (each with `method`, `ok`, `seconds`, `t_end`, `error`).
 
 **Stage 2**: `flux/<n>/flux_diagram_XXXX.dot` and `.png` (frames), `flux_diagram.avi` (video); `flux_species/<label>(<index>).png` (structure images).
+
+**The report**: `report/<run>_report.pdf` and the `.tex` it was built from, plus `report/settings_listing.py` (the copy of `settings.py` in Appendix C).
 
 **`run.log`** (in the run folder, not `output/`): everything `run.sh` printed, appended per run.
 

@@ -37,6 +37,17 @@ RUN_DEFAULTS = dict(
     recompute=False,                # True = ignore cached results
 )
 
+# The PDF report of a run (report.py): built at the end of a run of the full analyses list,
+# or any time with `bash run.sh runs/<name> report`. Needs LaTeX (latexmk + pdflatex).
+REPORT_DEFAULTS = dict(
+    enabled=True,                   # build it at the end of a full run
+    max_rows=60,                    # tables up to this many rows in full; longer ones as a summary + the file name
+    path_diagrams='reference+appendix',   # 'reference+appendix': the reference point's diagrams in the section,
+                                    #   the others in an appendix; 'reference': only those; 'all': all in the section
+    latexmk=None,                   # path of latexmk; None = on PATH or /Library/TeX/texbin
+)
+PATH_DIAGRAM_MODES = ('reference+appendix', 'reference', 'all')
+
 # Point-based analyses run on the temperature series and/or the pressure series. Each can
 # narrow them: None = the main settings of the same name.
 SERIES_DEFAULTS = dict(
@@ -171,10 +182,11 @@ DEFAULTS = dict(
     run=RUN_DEFAULTS,
     plot_style='screen',            # 'screen' or 'publication'
     publication_width_cm=17.8,      # 17.8 = double column, 8.5 = single column
+    report=REPORT_DEFAULTS,
     **ANALYSIS_DEFAULTS,
 )
 
-DICT_SECTIONS = ('solver', 'run', 'input_basis', *ANALYSIS_DEFAULTS)
+DICT_SECTIONS = ('solver', 'run', 'input_basis', 'report', *ANALYSIS_DEFAULTS)
 PATH_KEYS = ('mechanism', 'output_dir')
 REQUIRED = ('mechanism', 'probe_gas', 'empty_site', 'probe_adsorbate')
 REMOVED = {
@@ -348,5 +360,12 @@ def check_config(cfg):
     unknown = set(cfg.run) - set(RUN_DEFAULTS)
     if unknown:
         problems.append(f"unknown run settings: {sorted(unknown)}")
+    unknown = set(cfg.report) - set(REPORT_DEFAULTS)
+    if unknown:
+        problems.append(f"unknown report settings: {sorted(unknown)}")
+    if cfg.report.get('path_diagrams') not in PATH_DIAGRAM_MODES:
+        problems.append(f"report['path_diagrams'] must be one of {list(PATH_DIAGRAM_MODES)}")
+    if not isinstance(cfg.report.get('max_rows'), int) or cfg.report['max_rows'] < 1:
+        problems.append("report['max_rows'] must be a positive whole number")
     if problems:
         raise ConfigError(f"problems in {cfg.get('settings_file', 'settings.py')}:\n  - " + '\n  - '.join(problems))

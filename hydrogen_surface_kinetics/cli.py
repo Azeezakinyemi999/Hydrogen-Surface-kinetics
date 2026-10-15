@@ -2,8 +2,12 @@
 
     python -m hydrogen_surface_kinetics check  runs/<name>/settings.py
     python -m hydrogen_surface_kinetics run    runs/<name>/settings.py [--only a,b] [--workers N]
-                                               [--timeout S] [--recompute]
+                                               [--timeout S] [--recompute] [--no-report]
     python -m hydrogen_surface_kinetics status runs/<name>/settings.py
+    python -m hydrogen_surface_kinetics report runs/<name>/settings.py [--tex-only]
+
+A run of every analysis in settings.py ends with the PDF report (output/report/); `report`
+rebuilds it from the saved results without solving anything.
 """
 import argparse
 import glob
@@ -16,6 +20,7 @@ matplotlib.use('Agg')                                     # no windows from the 
 
 from .config import ANALYSIS_ORDER, ConfigError, load_config   # noqa: E402
 from .model import Model, ModelError                           # noqa: E402
+from .report import ReportError, latexmk_path                  # noqa: E402
 
 
 def cmd_check(args):
@@ -45,6 +50,12 @@ def cmd_check(args):
         print('\nsolves per analysis (nothing is solved by check):')
         print(table.to_string(index=False))
         print(f"total to solve: {int(table['to_solve'].sum())}")
+    if not cfg.report['enabled']:
+        print('\nreport: off (report = {"enabled": False})')
+    else:
+        exe = latexmk_path(cfg.report)
+        print('\nreport: built at the end of a full run, '
+              + (f'with {exe}' if exe else 'but LaTeX (latexmk) was not found: only the .tex will be written'))
     print(f'\noutput: {cfg.output_dir}\nsettings OK')
 
 
@@ -55,7 +66,12 @@ def cmd_run(args):
     if bad:
         raise ConfigError(f'unknown analyses {bad}; choose from {ANALYSIS_ORDER}')
     analyses.run(args.settings, only=only, workers=args.workers, job_timeout=args.timeout,
-                 recompute=True if args.recompute else None)
+                 recompute=True if args.recompute else None, report=False if args.no_report else None)
+
+
+def cmd_report(args):
+    from . import report
+    report.build(args.settings, latex=not args.tex_only)
 
 
 def cmd_status(args):
@@ -87,7 +103,8 @@ def main(argv=None):
     sub = p.add_subparsers(dest='command', required=True)
     for name, fn, text in (('check', cmd_check, 'load the settings and mechanism, list the conditions'),
                            ('run', cmd_run, 'run the analyses'),
-                           ('status', cmd_status, 'what is cached and saved')):
+                           ('status', cmd_status, 'what is cached and saved'),
+                           ('report', cmd_report, 'build the PDF report from the saved results (no solving)')):
         sp = sub.add_parser(name, help=text)
         sp.add_argument('settings', help="path to the run's settings.py")
         sp.set_defaults(func=fn)
@@ -96,10 +113,13 @@ def main(argv=None):
             sp.add_argument('--workers', type=int, help='parallel processes')
             sp.add_argument('--timeout', type=float, help='time limit per job (s)')
             sp.add_argument('--recompute', action='store_true', help='ignore cached results')
+            sp.add_argument('--no-report', action='store_true', help='do not build the PDF report at the end')
+        if name == 'report':
+            sp.add_argument('--tex-only', action='store_true', help='write the .tex but do not run LaTeX')
     args = p.parse_args(argv)
     try:
         args.func(args)
-    except (ConfigError, ModelError) as e:
+    except (ConfigError, ModelError, ReportError) as e:
         print(f'error: {e}', file=sys.stderr)
         return 2
     return 0
