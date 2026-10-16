@@ -347,9 +347,10 @@ def plot_arrhenius(ctx, intr, fits, sweep, per_area=False):
 
 
 def plot_surface_exchange(ctx, intr, sweep):
-    """From the temperature sweep, per case: (a) sticking probability gamma_eff against T,
-    (b) exchange flux J_ex against 1000/T, (c) hydrogen on the surface C_H against T; the
-    clean surface from the mechanism (dashed: gamma, J0 and C_H,eq at reference_pressure)."""
+    """From the temperature sweep, per case, all against T: (a) sticking probability
+    gamma_eff, (b) exchange flux J_ex (its Arrhenius form is in arrhenius_fits.csv), (c)
+    hydrogen on the surface C_H; the clean surface from the mechanism (dashed: gamma, J0 and
+    C_H,eq at reference_pressure)."""
     cfg, model = ctx.cfg, ctx.model
     probe = probe_label(model)
     cases = [c for c in common.sweep_cases(ctx, 'sweep') if c in set(sweep['case'])]
@@ -361,15 +362,14 @@ def plot_surface_exchange(ctx, intr, sweep):
         d = ok[ok['case'] == case].sort_values('T_K')
         style = dict(color=colors[case], ms=4.5, lw=1.6, label=case)
         axes[0].plot(d['T_K'], d['gamma_eff'], '-o', **style)
-        axes[1].plot(1000.0 / d['T_K'], d['J_exchange_mol_m2_s'], '-o', **style)
+        axes[1].plot(d['T_K'], d['J_exchange_mol_m2_s'], '-o', **style)
         axes[2].plot(d['T_K'], d['C_H_mol_m2'], '-o', **style)
     axes[0].plot(intr['T_K'], intr['gamma_clean'], **clean)
-    axes[1].plot(1000.0 / intr['T_K'], intr['J0_clean_mol_m2_s'], **clean)
+    axes[1].plot(intr['T_K'], intr['J0_clean_mol_m2_s'], **clean)
     axes[2].plot(intr['T_K'], intr['C_H_eq_mol_m2'], **clean)
     flux = f'mol {P.sub(probe)} m$^{{-2}}$ s$^{{-1}}$'
-    axes[0].set_xlabel('T (K)')
-    axes[1].set_xlabel('1000 / T  (1/K)')
-    axes[2].set_xlabel('T (K)')
+    for ax in axes:
+        ax.set_xlabel('T (K)')
     for ax in axes[:2]:
         ax.set_yscale('log')
     P.style_axis(axes[0], 'a) Sticking probability per collision', '$\\gamma_\\mathrm{eff}$ = $J_\\mathrm{diss}$ / Z')

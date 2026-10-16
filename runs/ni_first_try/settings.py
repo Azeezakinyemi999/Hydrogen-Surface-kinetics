@@ -68,7 +68,8 @@ diagnostics = {
         ('CH4 -> CH4*',           {'CH4(1)': 1, _S: 1},     {'C.[Pt](32)': 1},       (-25, -10),   'physisorption'),
         ('CO2 -> CO2*',           {'CO2(3)': 1, _S: 1},     {'CO2X(16)': 1},         (-40, -10),   'physisorption / very weak'),
     ],
-    'switch_off_cases': ['H2 only', 'CO'],           # molecular H2* switched off
+    'switch_off': ['[H][H].[Pt](42)'],               # what-if: molecular H2* switched off (as in the notebook)
+    'switch_off_cases': ['H2 only', 'CO'],
     'top_reactions': [('CO2', 1000.0, '[H][H].[Pt](42)'), ('CO', 700.0, '[Pt]#[C]OO[C]#[Pt](2071)')],
 }
 curves = {'temperatures': [300.0]}

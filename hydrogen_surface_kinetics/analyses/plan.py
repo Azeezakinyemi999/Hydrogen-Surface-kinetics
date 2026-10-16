@@ -48,13 +48,18 @@ def counts(ctx, names):
     if 'steady_state' in names or any(n in names for n in ('composition', 'diagnostics', 'paths', 'transients')):
         add('steady_state', len(main_pts), *_exact(ctx, C.main_conditions(ctx.model)), 'two starts each')
     if 'diagnostics' in names:
+        from .diagnostics import switch_off_items, switch_off_reactions
         s = cfg.diagnostics
-        species = s['switch_off'] or ctx.model.molecular_adsorbate
-        if species:
+        items = switch_off_items(cfg)
+        if not items:
+            add('diagnostics', 0, 0, 0, 'no switch-off what-if (switch_off = [])')
+        for label, parts in items:
+            n_rx = len(switch_off_reactions(ctx.model, parts))
             pts = common.points(ctx, 'diagnostics')
             cases = s['switch_off_cases'] or C.case_labels(cfg)
-            keys = [f"switch_off {species} | {_where(c, pt)}" for pt in pts for c in cases]
-            add('diagnostics', len(pts), len(keys), _by_name(ctx, 'cache_diagnostics', keys), f'{species} switched off')
+            keys = [f"switch_off {label} | {_where(c, pt)}" for pt in pts for c in cases]
+            add('diagnostics', len(pts), len(keys), _by_name(ctx, 'cache_diagnostics', keys),
+                f'what-if: {label} switched off ({n_rx} reaction{"s" if n_rx != 1 else ""})')
     if 'curves' in names:
         add('curves', len(common.points(ctx, 'curves')), *_exact(ctx, curves.curve_conditions(ctx)), 'two starts each')
     if 'sweep' in names:

@@ -161,7 +161,7 @@ def plot_equilibrium(ctx, temps, pressures, half, check, per_area=False):
     probe = probe_label(model)
     G, n = PA.site_density_mol_m2(model), model.probe_sites
     scale = G if per_area else 1.0
-    fig, axes = plt.subplots(1, 3, figsize=(15, 4.6))
+    fig, axes = plt.subplots(1, 3, figsize=(17, 4.8), gridspec_kw={'width_ratios': [1, 1, 1.45]})
     ref = check[(check['case'] == cfg.reference_label) & (check['basis'] != 'input_X')] if len(check) else check
     p_all = list(pressures) + (list(ref['P_ref_bar'].astype(float) * 1e5) if len(ref) else [])
     p_fine = np.logspace(np.log10(min(p_all)), np.log10(max(p_all)), 80)          # covers every point drawn
@@ -199,18 +199,19 @@ def plot_equilibrium(ctx, temps, pressures, half, check, per_area=False):
     main = check[(check['source'] == 'main') & (check['basis'] == 'fixed_probe')] if len(check) else check
     if len(main):
         cases = [c for c in case_labels(cfg) if c in set(main['case'])]
-        pts = list(dict.fromkeys(zip(main['T_K'], main['P_ref_bar'])))
+        pts = P.point_axis(axes[2], cfg, set(zip(main['T_K'], main['P_ref_bar'].astype(float))))
         colors = P.colors_for(cases, first=cfg.reference_label)
         for j, case in enumerate(cases):
             d = main[main['case'] == case]
-            xs = [pts.index((T, Pb)) + (j - (len(cases) - 1) / 2) * 0.12 for T, Pb in zip(d['T_K'], d['P_ref_bar'])]
+            xs = [pts.index((T, float(Pb))) + (j - (len(cases) - 1) / 2) * 0.08 for T, Pb in zip(d['T_K'], d['P_ref_bar'])]
             axes[2].plot(xs, d['q'], 'o', color=colors[case], ms=6, mec='white', mew=0.8, label=case, ls='')
         axes[2].axhline(1.0, color=P.MUTED, lw=1, ls='--')
-        axes[2].set_xticks(range(len(pts)), [f'{T:.0f} K\n{Pb:g} bar' for T, Pb in pts], fontsize=8)
         q = main['q'].to_numpy(dtype=float)
-        spread = max(0.02, np.nanmax(np.abs(q - 1)) * 1.3) if np.isfinite(q).any() else 0.02
-        axes[2].set_ylim(1 - spread, 1 + spread)
-        axes[2].legend(frameon=False, fontsize=8, loc='best')
+        lo = min(np.nanmin(q), 1.0) if np.isfinite(q).any() else 1.0                 # fit the data; keep 1 in view
+        hi = max(np.nanmax(q), 1.0) if np.isfinite(q).any() else 1.0
+        pad = max(0.01, 0.08 * (hi - lo))
+        axes[2].set_ylim(lo - pad, hi + max(0.03, 0.2 * (hi - lo)))                 # headroom for the series labels
+        axes[2].legend(frameon=False, fontsize=8, loc='upper left', bbox_to_anchor=(1.01, 1.0))
     P.style_axis(axes[2], 'c) Equilibrium check of the main steady states',
                  '$q = (\\theta_\\mathrm{H}/\\theta_v)\\,/\\,(K\\,p/P^\\circ)^{1/n}$')
     fig.tight_layout()

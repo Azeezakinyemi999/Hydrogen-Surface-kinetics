@@ -80,6 +80,12 @@ diagnostics = {
         ('CH4 -> CH4*', {'CH4(5)': 1, _S: 1}, {'C.[Pt](57)': 1}, (-25, -10), 'physisorption'),
         ('CO2 -> CO2*', {'CO2(3)': 1, _S: 1}, {'CO2X(19)': 1}, (-40, -10), 'physisorption / very weak'),
     ],
+    # switch_off: what-ifs that test how much the results depend on one species or route. Each
+    # entry switches off reactions and solves the main conditions again (this costs solves): a
+    # species name (all its surface reactions), a reaction number, or a list of those together.
+    # Use it for a species the binding check flags TOO STRONG, or a route you suspect, e.g.
+    # ['H(19)'] (H atoms desorbing to the gas). [] = no what-if.
+    'switch_off': [],
 }
 
 # Optional (needs RMG-Py): flux-diagram videos of the RMG input's batch reactors, using the

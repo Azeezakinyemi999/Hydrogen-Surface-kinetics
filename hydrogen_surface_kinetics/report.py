@@ -35,7 +35,8 @@ LATEX_TIMEOUT = 900                 # s
 SECTION_OUTPUTS = {
     'steady_state': ['steady_state_results.csv', 'rates_summary_vs_*.p[dn][fg]'],
     'composition': ['steady_state_surface_species.csv', 'steady_state_coverages.csv', 'surface_composition_vs_*.p[dn][fg]'],
-    'diagnostics': ['mechanism_binding_check.csv', 'mechanism_switch_off.csv', 'top_reactions.csv', 'binding_check.p[dn][fg]'],
+    'diagnostics': ['mechanism_binding_check.csv', 'mechanism_switch_off.csv', 'mechanism_switch_off_*.csv', 'top_reactions.csv',
+                    'binding_check.p[dn][fg]', 'switch_off_*.p[dn][fg]'],
     'convergence': ['convergence.csv', 'convergence*.p[dn][fg]'],
     'curves': ['poisoning_curves.csv', 'poisoning_tolerance.csv', 'poisoning_curves_vs_*.p[dn][fg]', 'site_blocking*.p[dn][fg]'],
     'sweep': ['temperature_sweep.csv', 'release_temperature.csv', 'temperature_sweep*.p[dn][fg]', 'sweep_coverages*.p[dn][fg]'],
@@ -313,11 +314,13 @@ class Report:
                  for rec in recs]
         heads = [h for _, h, _, _ in columns]
 
-        fixed = {}                                  # printed width of the columns that do not wrap, per size
+        fixed, head_min = {}, {}                    # printed width of the columns that do not wrap, per size
         for size, (cm_per_char, pad) in ((r'\scriptsize', (0.14, 0.23)), (r'\tiny', (0.115, 0.23))):
             fixed[size] = sum(pad + (0 if a.startswith('P') else cm_per_char * max(
                 [max(plain_width(x) for x in h.split(r'\\'))] + [plain_width(c[i]) for c in cells]))
                 for i, (_, h, a, _) in enumerate(columns))
+            head_min[size] = [1.1 * cm_per_char * max(plain_width(x) for x in h.split(r'\\'))   # bold header lines
+                              for _, h, a, _ in columns if a.startswith('P')]
         wraps = [float(a[1:]) for _, _, a, _ in columns if a.startswith('P')]
         # the first that fits: small font; small font with narrower wrapping columns; tiny; tiny narrower; landscape
         size, scale, landscape = r'\tiny', 1.0, True
@@ -326,7 +329,8 @@ class Report:
             if least is None and room >= sum(wraps):
                 size, scale, landscape = sz, 1.0, False
                 break
-            if least is not None and wraps and room >= least * len(wraps) and room < sum(wraps):
+            if (least is not None and wraps and room >= least * len(wraps) and room < sum(wraps)
+                    and all(w * room / sum(wraps) >= h for w, h in zip(wraps, head_min[sz]))):   # headers still fit
                 size, scale, landscape = sz, room / sum(wraps), False
                 break
         spec = '|' + '|'.join(r'>{\raggedright\arraybackslash}p{' + f'{float(a[1:]) * scale:.2f}' + 'cm}'
@@ -372,7 +376,7 @@ class Report:
             out.append(self.table(self.sort_cases(part, (*sort_extra, 'P_ref_bar')),
                                   case_col + list(lead) + [('P_ref_bar', '$p$(\\probe)\\\\(bar)', 'r', None)] + list(value_cols),
                                   f'{what}: pressure series at {T:g} K.', source, group_by))
-        return '\n\n'.join(out)
+        return '\n\n'.join(out).replace('\\end{landscape}\n\n\\begin{landscape}', '\n\n')   # landscape tables share pages
 
     def pivot(self, df, index, columns, value, caption, index_head, source=None, fmt=None, index_fmt=None,
               index_order=None, col_order=None, col_head=None, flag=None):
@@ -458,7 +462,9 @@ class Report:
             title, content = part
             if not content:
                 continue
-            if title:
+            if title and content.startswith(r'\begin{landscape}'):        # the heading goes on the landscape page
+                content = content.replace(r'\begin{landscape}', r'\begin{landscape}' + '\n' + r'\subsection*{' + title + '}', 1)
+            elif title:
                 body.append(r'\subsection*{' + title + '}')
             body.append(content)
         if text.get('columns'):
@@ -849,23 +855,54 @@ def section_diagnostics(rep):
         parts.append(('Binding energies against literature', rep.table(bc, cols, 'Adsorption enthalpies (kJ/mol): mechanism against literature.',
                                                                        'mechanism_binding_check.csv')))
     parts.append(('figure', 'binding_check', 'binding_check'))
-    sw = rep.csv('mechanism_switch_off.csv')
-    if sw is not None and len(sw):
-        species = ', '.join(sorted(set(sw['switched_off'].astype(str))))
+    from .analyses.diagnostics import file_label, switch_off_items
+    items = switch_off_items(rep.cfg)                       # only the what-ifs of the current settings
+    combined = rep.csv('mechanism_switch_off.csv') if items else None
+    pending = []
+    for label, _ in items:
+        sw = rep.csv(f'mechanism_switch_off_{file_label(label)}.csv')
+        source = f'mechanism_switch_off_{file_label(label)}.csv'
+        if sw is None and combined is not None and 'switched_off' in combined:
+            sw, source = combined[combined['switched_off'].astype(str) == label], 'mechanism_switch_off.csv'
+        if sw is None or not len(sw):
+            pending.append(label)
+            continue
+        what = tex_formula(label)
         ok = sw[sw['converged'].astype(bool)]
+        if 'reactions' in sw:
+            keys.append(f'What-if {what}: switched off ' + tex_escape(str(sw['reactions'].iloc[0])) + '.')
         if len(ok):
             i = (np.log(ok['tof_ratio'].abs())).abs().idxmax()
             r = ok.loc[i]
-            keys.append(f'Switching off {tex_formula(species)} changes the dissociation rate by up to a factor '
+            keys.append(f'Switching off {what} changes the dissociation rate by up to a factor '
                         f"{tex_num(r['tof_ratio'])} ({tex_escape(r['case'])}, {point_tex(r['T_K'], r['P_ref_bar'])}); the slowdown goes from "
                         f"{tex_num(r['slowdown_normal'])} to {tex_num(r['slowdown_switched_off'])}."
-                        + (' The conclusions do not depend on this species.' if (ok['tof_ratio'] - 1).abs().max() < 0.01 else ''))
-        parts.append((f'What-if: reactions of {tex_formula(species)} switched off', rep.series_tables(
-            sw, [('tof_ratio', r'rate\\ratio', 'r', None), ('slowdown_normal', r'slowdown\\normal', 'r', None),
-                 ('slowdown_switched_off', r'slowdown\\switched off', 'r', None), ('theta_free_normal', r'$\theta_\ast$\\normal', 'r', tex_coverage),
-                 ('theta_free_switched_off', r'$\theta_\ast$\\switched off', 'r', tex_coverage),
-                 ('top_switched_off', r'most abundant species\\switched off', 'P4.2', tex_escape), ('converged', 'converged', 'l', tex_flag)],
-            'Switch-off what-if', 'mechanism_switch_off.csv')))
+                        + (' The dissociation rates do not depend on it.' if (ok['tof_ratio'] - 1).abs().max() < 0.01 else ''))
+            if 'q_switched_off' in ok:
+                keys.append(f'Equilibrium check of the \\probe{{}} step with {what} switched off: $q$ = {tex_num(ok["q_normal"].min(), 4)} to '
+                            f'{tex_num(ok["q_normal"].max(), 4)} normally, {tex_num(ok["q_switched_off"].min(), 4)} to '
+                            f'{tex_num(ok["q_switched_off"].max(), 4)} switched off.')
+        cols = [('tof_ratio', r'rate\\ratio', 'r', None), ('slowdown_normal', r'slowdown\\normal', 'r', None),
+                ('slowdown_switched_off', r'slowdown\\off', 'r', None),       # off = with the reactions switched off
+                ('theta_free_normal', r'$\theta_\ast$\\normal', 'r', tex_coverage),
+                ('theta_free_switched_off', r'$\theta_\ast$\\off', 'r', tex_coverage)]
+        if 'q_switched_off' in sw:
+            cols += [('theta_H_normal', r'$\theta_\mathrm{H}$\\normal', 'r', tex_coverage),
+                     ('theta_H_switched_off', r'$\theta_\mathrm{H}$\\off', 'r', tex_coverage),
+                     ('q_normal', r'$q$\\normal', 'r', lambda v: tex_num(v, 4)),
+                     ('q_switched_off', r'$q$\\off', 'r', lambda v: tex_num(v, 4))]
+        cols += [('top_switched_off', r'most abundant\\species, off', 'P3.6', tex_escape),
+                 ('converged', 'converged', 'l', tex_flag)]
+        parts.append((f'What-if: {what} switched off', rep.series_tables(sw, cols, f'Switch-off what-if {what}', source)))
+        parts.append(('figure', 'switch_off', f'switch_off_{file_label(label)}', f'(What-if {what}.)'))
+    if pending:
+        cmd = f'bash run.sh runs/{run_name(rep.cfg)} --only diagnostics'
+        names = ', '.join(tex_formula(label) for label in pending)
+        keys.append(f'Listed in settings.py but not run yet: {names}. Run \\texttt{{{tex_escape(cmd)}}}, then rebuild the report.')
+        parts.append(('Switch-off what-ifs without results', f'The settings list the what-if{"s" if len(pending) > 1 else ""} '
+                      f'{names}, but the run has no results for {"them" if len(pending) > 1 else "it"} yet. '
+                      f'Run \\texttt{{{tex_escape(cmd)}}} (it solves the main conditions again with those reactions switched '
+                      'off), then rebuild the report.'))
     top = rep.csv('top_reactions.csv')
     if top is not None and len(top):
         parts.append(('Largest sources and sinks of chosen species', rep.table(
@@ -1536,6 +1573,9 @@ def appendix_files(rep):
         kind = {'.csv': 'table', '.png': 'figure', '.pdf': 'figure', '.yaml': 'mechanism', '.log': 'log'}.get(ext, 'other')
         rows.append({'file': entry, 'kind': kind, 'size': size, 'section': owner.get(entry),
                      'shown': 'yes' if entry in rep.used else 'no'})
+    if not rows:
+        return '\n\n'.join([r'\section{Output files}', r'\label{app:files}',
+                            'The output folder, ' + tex_path(rep.out) + ', has no files yet.'])
     df = pd.DataFrame(rows)
     df['section'] = [(r'\ref{sec:' + s + '}') if isinstance(s, str) and s in rep.built else '--' for s in df['section']]
     return '\n\n'.join([r'\section{Output files}', r'\label{app:files}',
@@ -1578,7 +1618,9 @@ def latex_errors(log_path, n=12):
 
 def write_tex(rep):
     title, title_tex = title_page(rep)
-    rep.built = [name for name in ANALYSIS_ORDER if name in SECTION_BUILDERS and rep.outputs(name)]
+    from .analyses.diagnostics import switch_off_items
+    rep.built = [name for name in ANALYSIS_ORDER if name in SECTION_BUILDERS
+                 and (rep.outputs(name) or (name == 'diagnostics' and switch_off_items(rep.cfg)))]   # a pending what-if
     sections = []
     for name in rep.built:
         sections += [r'\clearpage', SECTION_BUILDERS[name](rep)]

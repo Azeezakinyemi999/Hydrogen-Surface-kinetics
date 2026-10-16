@@ -63,6 +63,24 @@ def test_table_borders_and_row_limit(toy_cfg):
     assert full.count(r'\\ \hline') == 70
 
 
+def test_wide_tables(toy_cfg):
+    """A wrapping column is not narrowed below its header; a landscape table keeps its
+    heading, and the landscape tables of one series share pages."""
+    rep = report.Report(toy_cfg, log=lambda *a: None)
+    df = pd.DataFrame({**{f'c{i}': ['x' * 17] for i in range(5)}, 'note': ['some words']})
+    cols = [(f'c{i}', f'c{i}', 'l', str) for i in range(5)] + [('note', 'a very long header line of text', 'P5', str)]
+    tex = rep.table(df, cols, 'Narrow.')
+    assert tex.startswith(r'\begingroup\tiny') and 'p{5.00cm}' in tex      # not \scriptsize at 3.7 cm
+    wide = pd.DataFrame([{'case': 'probe only', 'series': 'pressure', 'T_K': T, 'P_ref_bar': Pb,
+                          **{f'v{i}': 'y' * 20 for i in range(14)}} for T in (400.0, 500.0) for Pb in (0.3, 3.0)])
+    tables = rep.series_tables(wide, [(f'v{i}', f'v{i}', 'l', str) for i in range(14)], 'Wide', 'wide.csv')
+    assert tables.count(r'\begin{landscape}') == 1 and tables.count(r'\end{landscape}') == 1
+    assert tables.count(r'\begin{longtable}') == 2
+    sec = rep.section('diagnostics', [('Wide tables', tables)])
+    assert r'\begin{landscape}' + '\n' + r'\subsection*{Wide tables}' in sec
+    assert sec.count(r'\subsection*{Wide tables}') == 1
+
+
 def test_figure_parts_and_stems(toy_cfg):
     rep = report.Report(toy_cfg, log=lambda *a: None)
     os.makedirs(rep.out, exist_ok=True)
@@ -96,3 +114,15 @@ def test_report_settings_checked(tmp_path):
                      ("report = {'max_rows': 0}\n", 'max_rows'), ("report = {'pages': 3}\n", 'unknown report')):
         with pytest.raises(hsk.ConfigError, match=msg):
             hsk.load_config(write_settings(tmp_path, TOY_SETTINGS, bad))
+
+
+def test_pending_switch_off_note(toy_cfg):
+    """A what-if listed in the settings but not run yet gets a diagnostics section with a note
+    and the command that runs it."""
+    toy_cfg.diagnostics['switch_off'] = ['I(ss)']
+    rep = report.Report(toy_cfg, log=lambda *a: None)
+    os.makedirs(rep.out, exist_ok=True)
+    with open(report.write_tex(rep)) as f:
+        tex = f.read()
+    assert r'\label{sec:diagnostics}' in tex
+    assert 'not run yet' in tex and '--only diagnostics' in tex
