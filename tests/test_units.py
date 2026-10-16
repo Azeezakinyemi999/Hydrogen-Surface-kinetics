@@ -281,3 +281,27 @@ def test_clean_surface_against_the_mechanism(toy_model):
         assert np.isclose(c['theta_H_eq'] + c['theta_v_eq'], 1.0)
         assert np.isclose(c['J0_clean_mol_m2_s'], c['kr_surface_m2_mol_s'] * (c['theta_H_eq'] * G) ** 2)
         assert np.isclose(c['kd_clean_mol_m2_s_Pa'] / c['kr_surface_m2_mol_s'], G ** 2 * c['K_eq'] / 1e5)
+
+
+def test_switch_off_settings(tmp_path, toy_model):
+    """switch_off: [] by default (no what-if); species, reaction numbers or groups; clear errors."""
+    from hydrogen_surface_kinetics.analyses import diagnostics as D
+    from hydrogen_surface_kinetics.analyses.common import Context
+    from hydrogen_surface_kinetics.analyses.plan import counts
+    cfg = toy_model.cfg
+    assert cfg.diagnostics['switch_off'] == [] and D.switch_off_items(cfg) == []
+    row = counts(Context(toy_model, log=lambda *a: None), ['diagnostics']).set_index('analysis').loc['diagnostics']
+    assert row['to_solve'] == 0 and 'no switch-off' in row['note']
+    cfg.diagnostics['switch_off'] = ['I(ss)', 3, ['I(s)', 3]]
+    items = D.switch_off_items(cfg)
+    assert [label for label, _ in items] == ['I(ss)', 'R3', 'I(s)+R3']
+    assert D.switch_off_reactions(toy_model, ['I(ss)']) == [2]
+    assert D.switch_off_reactions(toy_model, ['I(s)', 3]) == [1, 2, 3]
+    assert D.file_label('H2_X(320)') == 'H2_X_320' and D.file_label('I(s)+R3') == 'I_s+R3'
+    with pytest.raises(ValueError, match='does not exist'):
+        D.switch_off_reactions(toy_model, [99])
+    with pytest.raises(ValueError, match='not a species'):
+        D.switch_off_reactions(toy_model, ['XYZ'])
+    for bad in ("{'a': 1}", '2.5', '[[]]'):
+        with pytest.raises(hsk.ConfigError, match='switch_off'):
+            hsk.load_config(write_settings(tmp_path, TOY_SETTINGS, f"diagnostics = {{'switch_off': {bad}}}\n"))

@@ -67,6 +67,12 @@ diagnostics = {
     # adsorption_checks: add literature ranges for Cu(111) before relying on the binding
     # check (the Ni(111) values of runs/ni_first_try do not apply to this metal).
     'adsorption_checks': [],
+    # switch_off: what-ifs that test how much the results depend on one species or route. Each
+    # entry switches off reactions and solves the main conditions again (this costs solves): a
+    # species name (all its surface reactions), a reaction number, or a list of those together.
+    # Use it for a species the binding check flags TOO STRONG, or a route you suspect, e.g.
+    # ['H(19)'] (H atoms desorbing to the gas). [] = no what-if.
+    'switch_off': ['H(19)'],                # what-if: H atoms cannot desorb to the gas (H(19) + X <=> HX off)
 }
 
 # Optional (needs RMG-Py): flux-diagram videos of the RMG input's batch reactors, using the

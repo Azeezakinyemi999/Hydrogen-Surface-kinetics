@@ -67,7 +67,8 @@ ANALYSIS_DEFAULTS = dict(
     ),
     diagnostics=dict(
         adsorption_checks=[],       # (label, {reactants}, {products}, (lit. dH lo, hi) kJ/mol, note)
-        switch_off=None,            # species whose reactions are switched off in a what-if; None = molecular_adsorbate
+        switch_off=[],              # what-ifs: each a species (its surface reactions), a reaction number, or a list
+                                    #   of those switched off together; the main cases are solved again. [] = none
         switch_off_cases=None,      # cases for the what-if; None = reference + every impurity
         top_reactions=[],           # (case, T, species) or (case, T, P, species): largest sources/sinks
         top_n=5,
@@ -285,6 +286,20 @@ def ratio_problems(where, value, labels):
     return [f"'{where}' must be a non-negative number or {{impurity label: ratio}}"] if bad_number(value) else []
 
 
+def switch_off_problems(value):
+    """diagnostics['switch_off']: None, a species name or reaction number, or a list whose
+    entries are those or lists of those (one what-if per entry)."""
+    def part_ok(p):
+        return (isinstance(p, str) and p) or (isinstance(p, int) and not isinstance(p, bool) and p >= 0)
+    items = [] if value is None else (list(value) if isinstance(value, (list, tuple)) else [value])
+    for item in items:
+        parts = list(item) if isinstance(item, (list, tuple)) else [item]
+        if not parts or not all(part_ok(p) for p in parts):
+            return [f"diagnostics['switch_off']: {item!r} is not a species name, a reaction number (0, 1, ...) or "
+                    f"a list of those"]
+    return []
+
+
 def check_config(cfg):
     problems = []
     for key in REQUIRED:
@@ -335,6 +350,7 @@ def check_config(cfg):
             if bad:
                 problems.append(f"'{name}': unknown series {bad}; choose from {list(SERIES_NAMES)}")
             cfg[name]['series'] = series
+    problems += switch_off_problems(cfg.diagnostics.get('switch_off'))
     if cfg.mixture_mode not in ('same_each', 'split'):
         problems.append("'mixture_mode' must be 'same_each' or 'split'")
     labels = set(cfg.impurities) if isinstance(cfg.impurities, dict) else set()

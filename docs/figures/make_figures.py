@@ -581,14 +581,14 @@ def fig_sticking_exchange():
     for label, _, color, marker in cases:
         d = data[label]
         axes[0].plot(temps, [x['gamma'] for x in d], marker=marker, color=color, lw=1.5, ms=4.5, label=label)
-        axes[1].plot(1000 / temps, [x['J_ex'] for x in d], marker=marker, color=color, lw=1.5, ms=4.5, label=label)
+        axes[1].plot(temps, [x['J_ex'] for x in d], marker=marker, color=color, lw=1.5, ms=4.5, label=label)
         axes[2].plot(temps, [x['C_H'] for x in d], marker=marker, color=color, lw=1.5, ms=4.5, label=label)
     dash = dict(color=MUTED, ls='--', lw=1.2)
     axes[0].plot(temps, [c['gamma'] for c in clean], label='clean surface (mechanism)', **dash)
-    axes[1].plot(1000 / temps, J0, label='clean surface at equilibrium, $J_0$', **dash)
+    axes[1].plot(temps, J0, label='clean surface at equilibrium, $J_0$', **dash)
     axes[2].plot(temps, th * G, label='clean surface at equilibrium', **dash)
     axes[0].set(yscale='log', xlabel='T (K)', ylabel='$\\gamma_\\mathrm{eff} = J_\\mathrm{diss}/Z$', title='a) Sticking probability')
-    axes[1].set(yscale='log', xlabel='1000 / T  (K$^{-1}$)', ylabel='$J_\\mathrm{ex}$ (mol A$_2$ m$^{-2}$ s$^{-1}$)', title='b) Exchange flux')
+    axes[1].set(yscale='log', xlabel='T (K)', ylabel='$J_\\mathrm{ex}$ (mol A$_2$ m$^{-2}$ s$^{-1}$)', title='b) Exchange flux')
     axes[2].set(xlabel='T (K)', ylabel='$C_\\mathrm{H}$ (mol H m$^{-2}$)', title='c) Hydrogen on the surface')
     for ax in axes:
         ax.legend(fontsize=7.5)

@@ -1,7 +1,15 @@
-# Run outputs (each run's output folder, logs)
-runs/*/output/
-runs/*/*.log
+# Run outputs: every run's output folder at any depth (runs/<name>/output/ and
+# runs/<try>/<metal>/output/): tables, figures, caches, the PDF report, and the switch-off
+# what-ifs (mechanism_switch_off*.csv, cache_diagnostics/). Also output folders with another
+# name (output_*), and logs.
+runs/**/output/
+runs/**/output_*/
+runs/**/mechanism_switch_off*.csv
+runs/**/cache*/
+runs/**/report/
 *.log
+*.zip
+
 
 # Python
 __pycache__/

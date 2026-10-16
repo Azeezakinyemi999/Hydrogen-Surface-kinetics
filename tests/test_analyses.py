@@ -19,7 +19,7 @@ analyses = ['steady_state', 'composition', 'diagnostics', 'convergence', 'curves
             'equilibrium', 'orders', 'rate_control', 'paths', 'transients']
 plot_style = 'publication'
 diagnostics = {'adsorption_checks': [('A2 -> 2 A*', {'A2': 1, 'S': 2}, {'A(s)': 2}, (-100, -60), 'made up')],
-               'switch_off': 'I(ss)', 'top_reactions': [('I', 500.0, 'A(s)')]}
+               'switch_off': ['I(ss)', 3], 'top_reactions': [('I', 500.0, 'A(s)')]}   # a species, a reaction number
 curves = {'ratios': [1e-6, 1e-5, 1e-4, 1.585e-4, 1e-3]}   # 1.585e-4: the toy has two steady states there
 convergence = {'conditions': [('probe only', 500.0), ('I', 500.0, 3e5)]}
 pressure_sweep = {'pressures': [3e4, 1e5, 3e5, 1e6]}
@@ -264,3 +264,39 @@ def test_equilibrium(ctx):
     for name in ('equilibrium_coverage.csv', 'half_coverage_temperature.csv', 'equilibrium_check.csv',
                  'equilibrium_coverage.pdf', 'equilibrium_coverage_per_area.pdf'):
         assert os.path.exists(os.path.join(ctx.cfg.output_dir, name)), name
+
+
+def test_switch_off_what_ifs(ctx):
+    """One table per what-if (species or reaction number) plus the combined table, with the
+    net rate, theta_H and the equilibrium check."""
+    import pandas as pd
+    out = ctx.cfg.output_dir
+    both = pd.read_csv(os.path.join(out, 'mechanism_switch_off.csv'))
+    assert set(both['switched_off']) == {'I(ss)', 'R3'}
+    for name, label in (('mechanism_switch_off_I_ss.csv', 'I(ss)'), ('mechanism_switch_off_R3.csv', 'R3')):
+        df = pd.read_csv(os.path.join(out, name))
+        assert set(df['switched_off']) == {label} and df['converged'].all()
+        for col in ('reactions', 'tof_net_switched_off', 'theta_H_switched_off', 'q_normal', 'q_switched_off'):
+            assert col in df, (name, col)
+    r3 = pd.read_csv(os.path.join(out, 'mechanism_switch_off_R3.csv'))
+    assert r3['reactions'].iloc[0].startswith('#3: A(s) + I(s)')
+    ref = r3[r3['case'] == 'probe only']
+    assert np.allclose(ref['tof_ratio'], 1.0) and np.allclose(ref['q_switched_off'], 1.0)   # no I: nothing to switch off
+    imp = r3[r3['case'] == 'I']
+    assert np.allclose(imp['q_switched_off'], 1.0, atol=1e-6)    # without the A* + I* reaction nothing consumes A*
+    for stem in ('switch_off_I_ss', 'switch_off_R3'):              # one figure per what-if
+        assert os.path.exists(os.path.join(out, stem + '.pdf')), stem
+
+
+def test_switch_off_axis_scale():
+    """A switch-off panel is linear with 1 in view, logarithmic past a factor of 30."""
+    import matplotlib.pyplot as plt
+    from hydrogen_surface_kinetics.analyses.diagnostics import fit_y
+    fig, (a, b, c) = plt.subplots(1, 3)
+    fit_y(a, [0.95, 0.99, np.nan])
+    fit_y(b, [1e-3, 2.0])
+    fit_y(c, [0.0, 0.5])                                          # a zero stays linear
+    assert a.get_yscale() == 'linear' and a.get_ylim()[0] < 0.95 and a.get_ylim()[1] > 1.0
+    assert b.get_yscale() == 'log' and b.get_ylim()[0] < 1e-3 and b.get_ylim()[1] > 2.0
+    assert c.get_yscale() == 'linear' and c.get_ylim()[0] < 0.0
+    plt.close(fig)

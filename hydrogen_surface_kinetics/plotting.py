@@ -89,6 +89,27 @@ def two_states_handle():
     return plt.Line2D([], [], marker='o', ls='', ms=9, mfc='none', mec=INK)
 
 
+def point_axis(ax, cfg, present, label_series=True, labels=True):
+    """A category x axis of main points, `present` = {(T K, p bar)}: the temperature series,
+    then the pressure series, divided by a line with each series named inside the top edge
+    (leave headroom). Returns the points in axis order."""
+    from .conditions import series_points
+    order = series_points(cfg)
+    pts = [(pt['T'], pt['P'] / 1e5) for pt in order if (pt['T'], pt['P'] / 1e5) in present]
+    pts += sorted(set(present) - set(pts))
+    n_t = sum(1 for pt in order if pt['series'] in ('temperature', 'both') and (pt['T'], pt['P'] / 1e5) in present)
+    ax.set_xticks(range(len(pts)), [f'{T:.0f} K, {Pb:g} bar' for T, Pb in pts] if labels else [], fontsize=8,
+                  rotation=40, ha='right')
+    ax.set_xlim(-0.6, len(pts) - 0.4)
+    if 0 < n_t < len(pts):
+        ax.axvline(n_t - 0.5, color=GRID, lw=1.2, zorder=0)
+        if label_series:
+            for x, text in (((n_t - 1) / 2, 'temperature series'), ((n_t + len(pts) - 1) / 2, 'pressure series')):
+                ax.text(x, 0.985, text, transform=ax.get_xaxis_transform(), ha='center', va='top', fontsize=8,
+                        color=SECONDARY_INK)                     # inside the top edge, centred over each group
+    return pts
+
+
 # --- Styles ----------------------------------------------------------------------------
 def _screen(fig):
     for ax in fig.axes:

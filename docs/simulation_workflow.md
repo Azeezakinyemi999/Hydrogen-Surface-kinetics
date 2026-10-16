@@ -832,7 +832,7 @@ If both bases were computed, `basis_comparison.csv` gives the ratio $\mathrm{TOF
 
 **At a glance.**
 - Inputs: the mechanism, the results, literature values entered by hand.
-- Outputs: `mechanism_binding_check.csv` and `binding_check.png`, `mechanism_switch_off.csv` (the what-if runs), `top_reactions.csv`.
+- Outputs: `mechanism_binding_check.csv` and `binding_check.png`, `mechanism_switch_off_<label>.csv` and `switch_off_<label>.png` per what-if and `mechanism_switch_off.csv` with all of them (only when `switch_off` lists what-ifs), `top_reactions.csv`.
 - Code: `analyses/diagnostics.py`: `reaction_thermo`, `binding_check` (10.1); `switch_off` (10.2); `top_reactions` (10.3). Settings: the `diagnostics` section (`adsorption_checks`, `switch_off`, `switch_off_cases`, `top_reactions`, `top_n`).
 
 ```mermaid
@@ -866,9 +866,19 @@ so a binding energy that is too strong by $\delta$ raises $\theta_k/\theta_\ast$
 
 ### 10.2 What-if experiments with rate multipliers
 
-Setting the multiplier to 0 for every reaction that makes or consumes a species removes it from the network *without touching thermochemistry*. A multiplier scales the forward and reverse rates equally, so equilibrium constants stay unchanged ([Appendix E](#e-checking-the-equations-against-cantera)). `switch_off` sets the multiplier to 0 for every reaction that makes or uses `diagnostics['switch_off']` (by default the molecular adsorbate), passes the multipliers to every fresh surface object (`Model.new_surface(multipliers=…)`), and solves `switch_off_cases` again from a clean start. The multipliers are part of each job, so they are part of its cache fingerprint, and normal runs never see them.
+Setting the multiplier to 0 for every reaction that makes or consumes a species removes it from the network *without touching thermochemistry*. A multiplier scales the forward and reverse rates equally, so equilibrium constants stay unchanged ([Appendix E](#e-checking-the-equations-against-cantera)). `diagnostics['switch_off']` lists the what-ifs; it is empty by default, so none runs unless you ask. Each entry is one what-if: a species name (every surface reaction that makes or uses it), a reaction number, or a list of those switched off together:
 
-- The direct solve fails here: the switched-off species have identically zero Jacobian rows. Use the reactor method.
+```python
+diagnostics = {'switch_off': ['H(19)', 47, ['OX(14)', 'HOX(293)']]}   # three what-ifs
+```
+
+For each, `switch_off` sets the multiplier of those reactions to 0, passes the multipliers to every fresh surface object (`Model.new_surface(multipliers=…)`), and solves `switch_off_cases` again from a clean start. The multipliers are part of each job, so they are part of its cache fingerprint, and normal runs never see them. Each what-if gets `mechanism_switch_off_<label>.csv` (label `H_19`, `R47`, `OX_14+HOX_293`), and `mechanism_switch_off.csv` holds them all; next to the rates and slowdowns they list the reactions switched off, the net rate, the probe-gas consumption, $\theta_{A\ast}$ and the equilibrium check $q$ (11.2c), normal and switched off. The report shows the what-ifs listed in the current settings.
+
+**Figure** (`switch_off_<label>.png`, one per what-if): every main point on the x axis (the temperature series, then the pressure series), one color per case. (a) The rate ratio, dissociation TOF switched off / normal; 1 = no change. (b) The slowdown of each impurity case, normal (dot) and switched off (ring): a ring around its dot means the impurity effect does not depend on the reactions switched off. (c) The equilibrium check $q$ of the H₂ step, normal and switched off: dots below 1 with rings on 1 mean the reactions drain H\* and hold the step off equilibrium. A panel turns logarithmic when its values span more than a factor of 30; a missing marker is a point that did not converge with the what-if.
+
+**When to use it.** For a species the binding check flags as TOO STRONG (its coverage, and the poisoning it causes, may be over-predicted), or a route you suspect. Example: on Cu, $q < 1$ at 1000–1200 K for the probe gas alone, because H atoms desorb into a gas held at zero H atoms; switching off `H(19)` (its one surface reaction, H + ∗ ⇌ H∗) restores $q$ = 1 and shows that the dissociation rate changes by at most 5 %, while the net rate and the H coverage change much more.
+
+- When a switched-off species is on the surface, its Jacobian rows are identically zero and the direct solve fails; the reactor method then solves it. A switched-off gas species does not have this problem.
 - Removing a dominant species makes the network reroute, and other weakly constrained species can take over. Remove one species at a time and compare.
 - What-if results are sensitivity tests, not corrected predictions.
 
@@ -1266,6 +1276,7 @@ This section is for interpreting the outputs, not for how they are computed (Par
 | `rates_summary_vs_T`, `_vs_P` (Stage 9) | per case (x axis): (a) forward TOF, (b) slowdown vs the probe gas alone, (c) fraction of empty sites. One marker shape and color per temperature (`_vs_T`) or pressure (`_vs_P`; one row per pressure-series temperature) | (a) log scale: one decade up = 10× faster. (b) points above the dashed "no effect" line are slower; open markers = the slowdown if the number of sites were fixed, so a big gap between filled and open markers means multi-site adsorbates (CO\*\*) inflate the site count. (c) few empty sites = a crowded surface | each point needs `converged` and `starts_agree` True in `steady_state_results.csv` |
 | `surface_composition_vs_T`, `_vs_P` (Stage 8) | stacked bars: one bar per case, one panel per point; segments = coverage of each species | the tallest segment is what holds the surface; compare a case's bar with the reference bar to see what the impurity displaced. Pale gray = empty sites; dark gray "other" = everything below the plotting threshold together | a large "other" means many minor species; list them in `steady_state_surface_species.csv` |
 | `binding_check` (Stage 10.1) | per adsorption: literature range (gray bar) and the mechanism's ΔH at 298 K (marker) | a marker on its bar is consistent; ◀ red, left of the bar = binds too strongly (over-predicts that adsorbate's coverage); ▶ blue, right = too weakly. Error of δ shifts θ/θ\* by about $e^{\delta/RT}$ | literature ranges are entered by hand in `settings.py`: verify them |
+| `switch_off_<label>` (Stage 10.2) | per what-if, every case at every main point: (a) dissociation TOF switched off / normal, (b) slowdown normal (dot) and switched off (ring), (c) equilibrium check $q$ normal and switched off | (a) on the dashed 1 = the rate does not depend on those reactions; all cases off it together = they act on H₂ itself. (b) a ring around its dot = the impurity effect holds without them. (c) dots below 1 with rings on 1 = those reactions drain H\* | a sensitivity test, not a corrected prediction; missing markers = not converged with the what-if |
 | `convergence` (Stage 4) | per traced condition: (a) coverages, (b) forward TOF, (c) normalized residual, against surface time from a clean surface | the dotted line is where the reactor method accepted the state. A good trace: everything flat after the dotted line and the residual below the dashed limit (1) to the end. Residual climbing back above 1, or coverages moving late (10⁶–10⁸ s), means the accepted state was a long-lived intermediate | "never accepted" = no plateau within `reactor_t_max`: treat that point as no steady state |
 | `poisoning_curves_vs_T`, `_vs_P` (Stage 11.1) | one column per point (up to four per figure): Π against impurity level (top), impurity-held sites (bottom); one line per impurity | read along a line: where it crosses the dashed 0.5 line (diamond) is the tolerated level. A steep drop over a decade = a threshold-like poison. Ring + dashed line + shaded band = two steady states: solid is a fresh (clean) catalyst, dashed one that was covered first; inside the band the history decides | Π below $10^{-12}$ is real (log axis, no floor on Π); coverages are floored at $10^{-12}$ for display only |
 | `site_blocking` (Stage 7) | at one point, per impurity: (a) empty vs impurity-held sites, (b) site-count factor f, (c) Π from rates (dots), full site-blocking prediction (line), coverage-only prediction (dashed) | dots on the line: the impurity acts only by taking sites. Dashed below the line: multi-site adsorbates raise f, and the coverage-only estimate would exaggerate the poisoning | dots off the line: the probe step is not simply elementary, or rates depend on coverage; see `blocking_check` |
@@ -1297,7 +1308,7 @@ This section is for interpreting the outputs, not for how they are computed (Par
 | `sensitivity.csv` | `X_tof_fwd` (TRC rows), `X_probe_consumed` (DRC rows) | TRC: the largest negative values name the site holders; DRC: the rate-limiting steps |
 | `poisoning_over_time.csv` | `t_half_s`, `t_tenth_s`, `min_over_t0`, `end_over_t0`, `t_settle_s` | time to half and to a tenth of the initial rate; deepest drop; final level; time to settle within 10 % |
 | `mechanism_binding_check.csv` | `dH_298_mech`, `verdict` | OK / TOO STRONG / TOO WEAK against the literature range |
-| `mechanism_switch_off.csv` | `tof_ratio`, `slowdown_switched_off` vs `slowdown_normal` | how much a suspect species matters; a large change means conclusions depend on it |
+| `mechanism_switch_off_<label>.csv` | `tof_ratio`, `slowdown_switched_off` vs `slowdown_normal`, `q_switched_off` | how much a suspect species or reaction matters; a large change means conclusions depend on it; $q$ shows whether it pulls the H₂ step off equilibrium |
 | `convergence.csv` | `accepted_s`, `norm_residual` | when the state was accepted; the residual should stay below 1 afterwards |
 
 ### Table R4. Common patterns and what they mean
@@ -1562,7 +1573,7 @@ Every setting of `settings.py`, with its default (from `config.py`). Dictionary 
 | Section | Keys (defaults) | Stage |
 |---|---|---|
 | `composition` | `min_listed` ($10^{-3}$), `min_plotted` (0.02), `max_named` (7) | 8 |
-| `diagnostics` | `adsorption_checks` (`[]`: tuples of label, reactants, products, (lit. ΔH low, high) kJ/mol, note), `switch_off` (None = the molecular adsorbate), `switch_off_cases` (None = every case), `top_reactions` (`[]`: (case, T, species) or (case, T, P, species)), `top_n` (5) | 10 |
+| `diagnostics` | `adsorption_checks` (`[]`: tuples of label, reactants, products, (lit. ΔH low, high) kJ/mol, note), `switch_off` (`[]` = no what-if; entries: a species, a reaction number, or a list of those), `switch_off_cases` (None = every case), `top_reactions` (`[]`: (case, T, species) or (case, T, P, species)), `top_n` (5) | 10 |
 | `convergence` | `conditions` (`(case, T)` or `(case, T, P)`; None = the main conditions whose clean start did not converge, else the reference at the first point), `max_conditions` (6), `per_decade` (2) | 4 |
 | `curves` | `ratios` ($10^{-6}$ … 0.25, 12 levels), `impurities`, `blocking_point` (`(T, P)` of the site-blocking figure; None = the first point), the series keys | 11.1 |
 | `sweep` | `temperatures` (None = main range in `step` K), `step` (50), `ratio`, `impurities` (None = every impurity and the mixture); always at `reference_pressure` | 11.2 |
@@ -1622,7 +1633,7 @@ All files are in the run's `output/` folder. With `plot_style = 'publication'`, 
 
 **`mechanism_binding_check.csv`** (Stage 10.1): `adsorption`, `dH_298_mech`, `dH_literature`, `lit_low`, `lit_high`, `verdict`, `dG_<T>` for each main temperature, `literature_note`. Figure: `binding_check.png`.
 
-**`mechanism_switch_off.csv`** (Stage 10.2): `switched_off`, `series`, `case`, `T_K`, `P_ref_bar`, `tof_normal`, `theta_free_normal`, `converged`, `tof_switched_off`, `theta_free_switched_off`, `top_switched_off`, `tof_ratio`, and `slowdown_normal`/`slowdown_switched_off` relative to the reference case.
+**`mechanism_switch_off.csv`** and **`mechanism_switch_off_<label>.csv`** (Stage 10.2): `switched_off` (the what-if's label), `reactions` (numbers and equations switched off), `series`, `case`, `T_K`, `P_ref_bar`, `converged`; normal and switched off: `tof_normal`/`tof_switched_off`, `tof_net_normal`/`tof_net_switched_off`, `probe_consumed_normal`/`probe_consumed_switched_off`, `theta_free_normal`/`theta_free_switched_off`, `theta_H_normal`/`theta_H_switched_off`, `q_normal`/`q_switched_off`; `top_switched_off`, `tof_ratio`, and `slowdown_normal`/`slowdown_switched_off` relative to the reference case. Figure: `switch_off_<label>.png`.
 
 **`top_reactions.csv`** (Stage 10.3): `case`, `T_K`, `P_ref_bar`, `species`, `label`, `coverage`, `rate_1_per_s` (positive: makes the species), `reaction`, `equation`, `source` (the provenance line of the YAML note).
 
