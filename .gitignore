@@ -24,6 +24,10 @@ dist/
 
 # runs
 runs/ni_first_try/
+# RMG files the package does not read: species pictures and the edge seed (393 MB for the
+# try_* runs, one file over GitHub's 100 MB limit). They stay on disk (and in the zips).
+runs/**/species/
+runs/**/seed/seed_edge/
 
 # OS / editors
 .DS_Store
