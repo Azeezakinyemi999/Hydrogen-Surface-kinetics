@@ -1494,7 +1494,8 @@ def section_transients(rep):
 
 def section_flux(rep):
     parts, rows = [], []
-    for folder in sorted(glob.glob(os.path.join(rep.out, 'flux', '*')), key=lambda p: (len(p), p)):
+    natural = lambda p: [int(t) if t.isdigit() else t for t in re.split(r'(\d+)', os.path.basename(p))]  # noqa: E731
+    for folder in sorted(glob.glob(os.path.join(rep.out, 'flux', '*')), key=natural):   # 2 before 10, 650K before 1200K
         if not os.path.isdir(folder):
             continue
         frames = sorted(glob.glob(os.path.join(folder, 'flux_diagram_*.png')))
@@ -1508,7 +1509,8 @@ def section_flux(rep):
                           f'(reactor {tex_escape(name)}, frame {len(frames) // 2 + 1} of {len(frames)}).', 0.42))
     parts.insert(0, ('Reactors', rep.table(pd.DataFrame(rows), [('reactor', 'reactor', 'l', tex_escape), ('frames', 'frames', 'r', None),
                                                                ('video', 'video', 'l', tex_file)],
-                                           'Flux-diagram folders (one per RMG reactor).', full=True) if rows else ''))
+                                           'Flux-diagram folders (one per RMG reactor, and per temperature for a reactor '
+                                           'with a temperature range).', full=True) if rows else ''))
     return rep.section('flux', parts)
 
 

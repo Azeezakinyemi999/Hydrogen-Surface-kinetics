@@ -415,7 +415,7 @@ Nothing in the code is specific to one mechanism: a new mechanism needs only a n
 
 **At a glance.**
 - Inputs: Cantera YAML, seed `reactions.py` and `dictionary.txt`, the RMG `input.py`, structure images (optional). By default the RMG `input.py` and `seed/seed` (or `seed`) next to `settings.py` are used.
-- Outputs: for each reactor, a folder `output/flux/<n>/` with frames `flux_diagram_XXXX.dot` and `.png` and a video `flux_diagram.avi`; missing structure images drawn into `output/flux_species/` (or `flux['species_dir']`).
+- Outputs: for each reactor, a folder `output/flux/<n>/` (for a reactor with a temperature range, `output/flux/<n>_<T>K/` per temperature) with frames `flux_diagram_XXXX.dot` and `.png` and a video `flux_diagram.avi`; missing structure images drawn into `output/flux_species/` (or `flux['species_dir']`).
 - Code: `analyses/flux.py` (`load_seed`, `build_matched_model`, `mol_from_pt_smiles`, `draw_species_images`, `reaction_index`, `simulate`, `condition_label`, `bake_condition_label`, `run`) and RMG's `rmgpy.tools.fluxdiagram.generate_flux_diagram`. Optional: it is the only part that needs RMG-Py, and it runs only when named (`--only flux`).
 
 ```mermaid
@@ -467,7 +467,7 @@ with $x = C_k(t)/\max_{k,t} C$ for node borders and $x = \lvert R_{ab}(t)\rvert 
 3. Keep the reactions whose species all matched, and regenerate their flux pairs against the shared species objects.
 4. Draw any missing structure images.
 5. **Match reactions.** Index Cantera reactions by (set of reactant base labels, set of product base labels), in both orientations, and map each RMG reaction to a phase, an index and a sign.
-6. **Simulate** each reactor, one at a time (skipping those that already have a video when `skip_existing` is set) on log-spaced times from $10^{-8}$ s to the termination time (1000 s if none is given), with tolerances `rtol` and `atol` (the `flux` section). Record gas concentrations, surface concentrations, and gas and surface net rates of progress. A solver failure is caught, and the batch moves on.
+6. **Simulate** each reactor, one at a time (skipping those that already have a video when `skip_existing` is set), at its temperature. A reactor given a temperature range has no single temperature: RMG samples the range itself, starting at its low end, so it is simulated at each of `flux['temperatures']`, by default both ends of its range. Each run is on log-spaced times from $10^{-8}$ s to the termination time (1000 s if none is given), with tolerances `rtol` and `atol` (the `flux` section). Record gas concentrations, surface concentrations, and gas and surface net rates of progress. A solver failure is caught, and the batch moves on.
 7. Reorder concentrations and rates into RMG's species and reaction order, multiplying rates by the matching sign.
 8. `generate_flux_diagram` writes one `.dot` and one `.png` per time point, repeating the first and last frames (frame rate × padding) so the video pauses on them, and stitches an AVI.
 9. **Bake the condition label** (T, P, composition) into each `.dot` file's label, re-render the PNGs with `dot`, and re-stitch the video with ffmpeg.
@@ -946,7 +946,7 @@ Report the results with their caveats listed; or run what-if sensitivity tests t
 
 ### 11.2 Temperature sweep
 
-**What it does.** Solves the probe-gas-only case and every impurity case at one impurity level over a temperature grid (default 300–1000 K in 50 K steps), and reports:
+**What it does.** Solves the probe-gas-only case and every impurity case at one impurity level over a temperature grid (default: from the lowest to the highest of `temperatures` in 50 K steps; `sweep['temperatures']` and `sweep['step']`), and reports:
 - an Arrhenius plot of the forward probe TOF;
 - the **local apparent activation energy** by central differences, on the non-uniform grid of converged points (`np.gradient` in $1/T$), for cases with at least three converged temperatures:
 
@@ -1584,7 +1584,7 @@ Every setting of `settings.py`, with its default (from `config.py`). Dictionary 
 | `rate_control` | `cases` (None = reference + every impurity), the series keys, `ratio`, `drc_delta` (0.05), `drc_top_n` (20), `trc_delta` ($10^{6}$ J/kmol), `trc_min_coverage` ($10^{-3}$) | 11.4 |
 | `paths` | `conditions` (`(case, T)` or `(case, T, P)`; None = every case at every series point), `elements` (None = the probe gas's), `threshold` ($10^{-8}$), `flow_type` (`'OneWayFlow'`), `formats` (`['png']`), `style` (`'rmg'` or `'cantera'`), `species_images` (None = `species/` next to `settings.py`, else `output/flux_species/`; False = none), `image_names` (False), `orientation` (`'TB'` or `'LR'`), `edge_labels` (True) | 11.5 |
 | `transients` | `impurities`, the series keys, `ratios` ($10^{-6}$, $10^{-4}$, $10^{-2}$, 0.25), `t_start` ($10^{-9}$ s), `t_stop` ($10^{8}$ s), `per_decade` (4) | 11.6 |
-| `flux` | `rmg_path`, `rmg_input` and `seed_dir` (None = the RMG `input.py` and `seed/seed` next to `settings.py`), `species_dir` (None = `output/flux_species`), `reactor_indices` (None = all), `n_points` (100), `rtol`/`atol` ($10^{-10}$, $10^{-22}$), `skip_existing` (True) | 2 |
+| `flux` | `rmg_path`, `rmg_input` and `seed_dir` (None = the RMG `input.py` and `seed/seed` next to `settings.py`), `species_dir` (None = `output/flux_species`), `reactor_indices` (None = all), `temperatures` (for a reactor with a temperature range; None = both ends), `n_points` (100), `rtol`/`atol` ($10^{-10}$, $10^{-22}$), `skip_existing` (True) | 2 |
 
 **`report`** ([The run report](#the-run-report))
 
@@ -1662,7 +1662,7 @@ All files are in the run's `output/` folder. With `plot_style = 'publication'`, 
 
 Each `info` dictionary holds `method`, `converged`, the four `*_ok` checks, `residual_1_per_s`, `residual_species`, `residual_allowed_1_per_s`, `residual_over_tof`, `tof_fwd_1_per_s`, `sum_error`, `min_coverage`, `gas_drift`, `total_seconds`, and `attempts` (each with `method`, `ok`, `seconds`, `t_end`, `error`).
 
-**Stage 2**: `flux/<n>/flux_diagram_XXXX.dot` and `.png` (frames), `flux_diagram.avi` (video); `flux_species/<label>(<index>).png` (structure images).
+**Stage 2**: `flux/<n>/` (or `flux/<n>_<T>K/` for each temperature of a reactor with a temperature range): `flux_diagram_XXXX.dot` and `.png` (frames), `flux_diagram.avi` (video); `flux_species/<label>(<index>).png` (structure images).
 
 **The report**: `report/<run>_report.pdf` and the `.tex` it was built from, plus `report/settings_listing.py` (the copy of `settings.py` in Appendix C).
 

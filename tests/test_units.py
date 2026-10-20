@@ -179,6 +179,19 @@ def test_flux_finds_rmg_files_next_to_settings(tmp_path):
     assert rmg_input == str(tmp_path / 'input.py') and seed_dir == str(tmp_path / 'seed' / 'seed')
 
 
+def test_flux_reactor_temperatures():
+    """A reactor with one T keeps it; RMG leaves T unset for a range, which is run at both ends
+    by default or at flux['temperatures']."""
+    from types import SimpleNamespace as NS
+    from hydrogen_surface_kinetics.analyses import flux
+    fixed = NS(T=NS(value_si=600.0), Trange=None)
+    ranged = NS(T=None, Trange=[NS(value_si=650.0), NS(value_si=1200.0)])
+    assert flux.reactor_temperatures(fixed) == [600.0]
+    assert flux.reactor_temperatures(fixed, [700, 800]) == [600.0]
+    assert flux.reactor_temperatures(ranged) == [650.0, 1200.0]
+    assert flux.reactor_temperatures(ranged, [650, 800, 1000]) == [650.0, 800.0, 1000.0]
+
+
 def test_per_impurity_ratios(tmp_path):
     m = hsk.Model(hsk.load_config(write_settings(tmp_path, TOY_SETTINGS, TWO_IMPURITIES
                                                  + "impurity_ratio = {'I': 1 / 190, 'AI': 10 / 190}\n")))

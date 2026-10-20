@@ -7,7 +7,10 @@ with Cantera, then drawn with rmgpy.tools.fluxdiagram.generate_flux_diagram.
 Species are matched between the seed mechanism and the Cantera file by label (without
 the "(index)" suffix), falling back to structure isomorphism where the labels differ:
 the Cantera name is a SMILES with [Pt] for the site, rebuilt as an RMG Molecule.
-Output: flux/<reactor number>/ (frames, .dot files, flux_diagram.avi).
+A reactor with a temperature range has no single T (RMG samples the range itself): it is run
+at each of flux['temperatures'], by default at both ends of its range.
+Output: flux/<reactor number>/ (frames, .dot files, flux_diagram.avi); for a reactor with a
+temperature range, flux/<reactor number>_<T>K/ for each temperature.
 """
 import glob
 import os
@@ -181,10 +184,21 @@ def draw_species_images(species, species_dir, log=print):
 
 
 # --- one reactor -------------------------------------------------------------------------
-def simulate(rs, gas, surf, ct_name_by_base, n_points, rtol, atol):
-    """RMG surfaceReactor semantics: closed, isothermal, constant-volume batch reactor with
-    V from 1 mol of gas (RMG's own convention) and A = V * surface_volume_ratio."""
-    T, P = rs.T.value_si, rs.P_initial.value_si
+def reactor_temperatures(rs, temperatures=None):
+    """K: the temperatures at which to run one RMG reactor. A reactor with one temperature
+    keeps it. One with a range has none (RMG leaves rs.T unset and samples the range, starting
+    at its low end): `temperatures` (flux['temperatures']), or by default both ends."""
+    if getattr(rs, 'T', None) is not None:
+        return [rs.T.value_si]
+    if temperatures is not None:
+        return [float(t) for t in temperatures]
+    return [t.value_si for t in (rs.Trange[0], rs.Trange[-1])]
+
+
+def simulate(rs, T, gas, surf, ct_name_by_base, n_points, rtol, atol):
+    """RMG surfaceReactor semantics at temperature T: closed, isothermal, constant-volume batch
+    reactor with V from 1 mol of gas (RMG's own convention) and A = V * surface_volume_ratio."""
+    P = rs.P_initial.value_si
     V = ct.gas_constant / 1e3 * T / P
     term_time = next((t.time.value_si for t in rs.termination if hasattr(t, 'time')), 1000.0)
     X = {ct_name_by_base[strip_index(s.label)][1]: x for s, x in rs.initial_gas_mole_fractions.items() if x}
@@ -208,9 +222,9 @@ def simulate(rs, gas, surf, ct_name_by_base, n_points, rtol, atol):
     return {k: np.array(v) for k, v in hist.items()}
 
 
-def condition_label(rs):
+def condition_label(rs, T):
     comp = ' '.join(f'{strip_index(s.label)}={x:.2f}' for s, x in rs.initial_gas_mole_fractions.items() if x > 0)
-    return f'T={rs.T.value_si:.0f}K, P={rs.P_initial.value_si / 1e5:.1f}bar\\n{comp}'
+    return f'T={T:.0f}K, P={rs.P_initial.value_si / 1e5:.1f}bar\\n{comp}'
 
 
 def bake_condition_label(folder, label):
@@ -263,18 +277,21 @@ def run(ctx):
     job.load_input(rmg_input)
     systems = job.reaction_systems
     indices = s['reactor_indices'] if s['reactor_indices'] is not None else list(range(len(systems)))
-    log(f'  {len(systems)} reactors in {rmg_input}; running {len(indices)}')
+    jobs = [{'index': i, 'T': T, 'ranged': getattr(systems[i], 'T', None) is None}
+            for i in indices for T in reactor_temperatures(systems[i], s['temperatures'])]
+    log(f'  {len(systems)} reactors in {rmg_input}; running {len(indices)}'
+        + (f', {len(jobs)} runs (a reactor with a temperature range once per temperature)' if len(jobs) > len(indices) else ''))
 
     gas_idx = {n: i for i, n in enumerate(gas.species_names)}
     surf_idx = {n: i for i, n in enumerate(surf.species_names)}
 
     def one(jb):
-        idx = jb['index']
+        idx, T = jb['index'], jb['T']
         rs = systems[idx]
-        out_dir = os.path.join(out_root, str(idx + 1))
+        out_dir = os.path.join(out_root, f'{idx + 1}_{T:.0f}K' if jb['ranged'] else str(idx + 1))
         if s['skip_existing'] and os.path.exists(os.path.join(out_dir, 'flux_diagram.avi')):
             return {'skipped': True, 'folder': out_dir}
-        h = simulate(rs, gas, ctx.model.new_surface(), ct_name_by_base, s['n_points'], s['rtol'], s['atol'])
+        h = simulate(rs, T, gas, ctx.model.new_surface(), ct_name_by_base, s['n_points'], s['rtol'], s['atol'])
         conc = np.zeros((len(h['t']), len(species)))
         for p, (phase, name) in rmg_to_ct.items():
             conc[:, p] = h['gas_c'][:, gas_idx[name]] if phase == 'gas' else h['surf_c'][:, surf_idx[name]]
@@ -285,17 +302,18 @@ def run(ctx):
                 rates[:, i] = sign * (h['gas_q'][:, ci] if phase == 'gas' else h['surf_q'][:, ci])
         os.makedirs(out_dir, exist_ok=True)
         rmg['generate_flux_diagram'](model, h['t'], conc, rates, out_dir, species_directory=species_dir)
-        label = condition_label(rs)
+        label = condition_label(rs, T)
         bake_condition_label(out_dir, label)
         return {'skipped': False, 'folder': out_dir, 'label': label}
 
     # One reactor at a time in this process: forking after RDKit/Cairo have drawn images
     # crashes the child on macOS, and each reactor is a single long Cantera run anyway.
     res = {}
-    for i in indices:
-        key, t0 = f'flux reactor {i + 1}', time.time()
+    for jb in jobs:
+        key = f"flux reactor {jb['index'] + 1}" + (f", {jb['T']:.0f} K" if jb['ranged'] else '')
+        t0 = time.time()
         try:
-            res[key] = {'status': 'done', **one({'index': i})}
+            res[key] = {'status': 'done', **one(jb)}
             note = 'skipped (video exists)' if res[key]['skipped'] else os.path.relpath(res[key]['folder'], cfg.run_dir)
         except Exception as e:                      # keep going: one stiff reactor must not stop the batch
             res[key] = {'status': 'error', 'error': f'{type(e).__name__}: {str(e).strip().splitlines()[0][:200]}'}

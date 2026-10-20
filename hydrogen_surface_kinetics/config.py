@@ -147,6 +147,8 @@ ANALYSIS_DEFAULTS = dict(
         seed_dir=None,              # folder with the seed reactions.py + dictionary.txt; None = seed/seed or seed next to settings.py
         species_dir=None,           # structure images (drawn if missing); None = <output>/flux_species
         reactor_indices=None,       # None = every reactor in rmg_input; or e.g. [0, 6, 24]
+        temperatures=None,          # K, for a reactor with a temperature range (it has no single T):
+                                    #   None = both ends of its range; e.g. [650, 800, 1000, 1200]
         n_points=100,               # time points per reactor (~45 for a quick check)
         rtol=1e-10, atol=1e-22,     # Cantera's defaults fail on stiff 300 K reactors
         skip_existing=True,         # skip reactors whose folder already has flux_diagram.avi

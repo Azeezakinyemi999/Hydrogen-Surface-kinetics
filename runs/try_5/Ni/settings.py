@@ -82,7 +82,7 @@ diagnostics = {
     # entry switches off reactions and solves the main conditions again (this costs solves): a
     # species name (all its surface reactions), a reaction number, or a list of those together.
     # Use it for a species the binding check flags TOO STRONG, or a route you suspect, e.g.
-    # ['H(19)'] (H atoms desorbing to the gas). [] = no what-if.
+    # ['H(30)'] (H atoms desorbing to the gas). [] = no what-if.
     'switch_off': [],
 }
 
